@@ -28,3 +28,20 @@ jarvis_*.wav
 
 # OS
 .DS_Store
+
+# Secret-bearing / generated files — NEVER commit (repo is PUBLIC)
+.jarvis.local.conf
+jarvis.conf.local
+cal_sync.py
+cal_sync.py.bak*
+cal_sync.bak*
+*.bak.*
+*.debug.log
+cal_sync_errors.log
+data/
+logs/
+.scratch/
+.vad_chunk.wav
+vad_chunk.wav
+test_screenshot.png
+web_search_mm.py
