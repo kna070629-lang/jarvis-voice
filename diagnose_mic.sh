@@ -35,7 +35,7 @@ if command -v dumpsys &>/dev/null; then
 fi
 
 echo "4. Checking for conflicting processes..."
-ps -ef 2>/dev/null | grep -i "microphone\|mediarecorder\|voice" | grep -v grep || echo "No obvious conflicting processes"
+ps -ef 2>/dev/null | grep -iE "microphone|mediarecorder|voice" | grep -v grep || echo "No obvious conflicting processes"
 
 echo ""
 echo "=== Next Steps ==="
