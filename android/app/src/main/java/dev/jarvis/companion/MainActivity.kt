@@ -138,8 +138,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             languageTag = listOf("en-US", "en-IN", "hi-IN").getOrElse(position) { "en-US" }
             if (ttsReady) applyTtsLanguage()
         }
-        slider(page, "Speech speed", 50) { speechRate = 0.5f + it / 100f; applyTtsSettings() }
-        slider(page, "Voice pitch", 50) { speechPitch = 0.5f + it / 100f; applyTtsSettings() }
+        slider(page, "Speech speed", 50) { speechRate = it; applyTtsSettings() }
+        slider(page, "Voice pitch", 50) { speechPitch = it; applyTtsSettings() }
 
         section(page, "SECURE PYTHON CONNECTION")
         text(page, "The bridge accepts chat requests on 127.0.0.1 only. Paste its private pairing token; Android stores it encrypted with Android Keystore.", 12, muted, false, 8)
@@ -759,7 +759,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         parent.addView(this, matchWrap(8, 48))
     }
 
-    private fun slider(parent: LinearLayout, label: String, initial: Int, changed: (Int) -> Unit) {
+    private fun slider(parent: LinearLayout, label: String, initial: Int, changed: (Float) -> Unit) {
         text(parent, "$label  ·  1.0", 12, muted, false, 0)
         SeekBar(this).apply {
             max = 100
