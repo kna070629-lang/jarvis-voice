@@ -987,11 +987,14 @@ def speak(text: str) -> str:
     log(f"TTS: {len(chunks)} chunk(s), total {len(spoken)} chars")
     for i, chunk in enumerate(chunks):
         try:
-            subprocess.run(
+            result = subprocess.run(
                 ["termux-tts-speak", chunk],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 timeout=15,
             )
+            if result.returncode != 0:
+                log_error(f"TTS chunk {i+1}/{len(chunks)} failed (exit {result.returncode})")
+                break
         except subprocess.TimeoutExpired:
             log_error(f"TTS chunk {i+1}/{len(chunks)} timed out — skipping rest: {chunk[:60]!r}")
             break
@@ -1054,7 +1057,7 @@ def _wav_rms(wav_path: str) -> float:
         return 0.0
 
 def _transcribe_wav(wav_path: str) -> str:
-    """Transcribe a WAV file using whisper-cli.
+    """Transcribe a WAV file using whisper-cli, then Android speech recognition.
 
     Checks RMS energy first — if the recording is silent, returns ""
     immediately without running Whisper (saves ~8s and prevents false triggers).
@@ -1069,8 +1072,8 @@ def _transcribe_wav(wav_path: str) -> str:
 
     model = _find_whisper_model()
     if not model:
-        log("No whisper model found — set WHISPER_MODEL env var or download to ~/models/")
-        SCREEN.update(status="⚠ No whisper model — see README")
+        log("No whisper model found — trying Android speech recognition")
+        SCREEN.update(status="Using Android speech recognition…")
         return _termux_stt_fallback()
 
     try:
@@ -1085,6 +1088,10 @@ def _transcribe_wav(wav_path: str) -> str:
             ],
             capture_output=True, text=True, timeout=30,
         )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or f"exit code {result.returncode}"
+            log_warn(f"whisper-cli failed ({detail}) — trying Android speech recognition")
+            return _termux_stt_fallback()
         lines = [l.strip() for l in result.stdout.splitlines() if l.strip()]
         text = " ".join(lines).strip()
         # Filter hallucinations
@@ -1092,23 +1099,34 @@ def _transcribe_wav(wav_path: str) -> str:
            text.lower().strip() in _WHISPER_HALLUCINATIONS:
             log(f"Whisper hallucination filtered: '{text}'")
             return ""
-        return text
+        return text or _termux_stt_fallback()
     except subprocess.TimeoutExpired:
-        log("whisper-cli timed out")
-        return ""
+        log_warn("whisper-cli timed out — trying Android speech recognition")
+        return _termux_stt_fallback()
     except Exception as e:
-        log(f"whisper-cli error: {e}")
-        return ""
+        log_warn(f"whisper-cli error: {e} — trying Android speech recognition")
+        return _termux_stt_fallback()
 
-def _termux_stt_fallback() -> str:
+def _termux_stt_fallback(timeout: float = 15) -> str:
     """Last-resort fallback to termux-speech-to-text."""
     try:
         result = subprocess.run(
             ["termux-speech-to-text"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=max(1, timeout),
         )
+        if result.returncode != 0:
+            detail = result.stderr.strip() or f"exit code {result.returncode}"
+            log_warn(f"termux-speech-to-text failed: {detail}")
+            return ""
         return result.stdout.strip()
-    except Exception:
+    except FileNotFoundError:
+        log_warn("termux-speech-to-text not found — install Termux:API and its Android app")
+        return ""
+    except subprocess.TimeoutExpired:
+        log_warn("termux-speech-to-text timed out")
+        return ""
+    except Exception as e:
+        log_warn(f"termux-speech-to-text error: {e}")
         return ""
 
 def _force_kill_proc(proc: subprocess.Popen, context: str):
@@ -1289,8 +1307,14 @@ def _countdown_bar(duration: float, stop_event: threading.Event):
 
 
 def listen(timeout: float = QUESTION_TIMEOUT) -> str:
-    """Record a single continuous audio clip then transcribe with whisper-cli."""
+    """Listen with local Whisper when available, otherwise use Android STT."""
     import tempfile
+
+    # Android's speech recognizer opens its own microphone UI. Avoid recording
+    # an unused WAV first when local Whisper is not configured.
+    if not _find_whisper_model() or shutil.which("whisper-cli") is None:
+        SCREEN.update(status="Android speech recognition — speak now")
+        return _termux_stt_fallback(timeout + 5)
 
     wav = str(Path(tempfile.gettempdir()) / "jarvis_listen.wav")
     duration = min(timeout, RECORD_DURATION)
@@ -1813,9 +1837,10 @@ class JarvisTUI:
             except Exception as e:
                 log_error(f"Could not delete stale file {f}: {e}")
 
-        missing = [cmd for cmd in ("termux-tts-speak", "whisper-cli",
-                                   "termux-microphone-record")
+        missing = [cmd for cmd in ("termux-tts-speak", "termux-microphone-record", "ffmpeg")
                    if shutil.which(cmd) is None]
+        if shutil.which("whisper-cli") is None and shutil.which("termux-speech-to-text") is None:
+            missing.append("whisper-cli or termux-speech-to-text")
         if missing:
             for cmd in missing:
                 log_error(f"Missing required command: {cmd}")
@@ -1824,7 +1849,7 @@ class JarvisTUI:
             print("❌  Missing required commands:")
             for cmd in missing:
                 print(f"    • {cmd}")
-            print("    Run: pkg install termux-api whisper.cpp")
+            print("    Run: pkg install termux-api ffmpeg; install whisper.cpp and a model for local STT, or use Termux:API speech recognition")
             _log_session_banner("END (missing commands)")
             sys.exit(1)
 
@@ -1834,6 +1859,18 @@ class JarvisTUI:
             log(f"Whisper model: {Path(model).name}")
         else:
             log_warn("No whisper model found — set WHISPER_MODEL=/path/to/ggml-*.bin")
+
+        mobile_server = None
+        try:
+            from mobile_bridge import start_mobile_bridge
+
+            def process_mobile_message(text: str) -> str:
+                return send_message(SESSION_KEY, text) or get_response(text)
+
+            mobile_server, _mobile_thread = start_mobile_bridge(process_mobile_message)
+            log("Android companion API listening on loopback port 8765")
+        except Exception as exc:
+            log_exception("Android companion API did not start", exc)
 
         self.running = True
         self.vad = VADLoop()
@@ -1899,6 +1936,13 @@ class JarvisTUI:
             log(f"Shutting down — reason: {exit_reason}")
             self.vad.stop()
             self.running = False
+            if mobile_server is not None:
+                try:
+                    mobile_server.shutdown()
+                    mobile_server.server_close()
+                    log("Android companion API stopped")
+                except Exception as exc:
+                    log_exception("Android companion API shutdown failed", exc)
             _log_thread_dump()
             _log_session_banner(f"END ({exit_reason})")
             sys.stdout.write("\033[?25h\n")
@@ -1926,7 +1970,7 @@ def wait_for_termux_recording(path: Path, timeout_s: float = 5.0):
     return path.exists() and path.stat().st_size > 0
 
 def test_mic(duration=5.0, out_path=None):
-    """Full pipeline test: record → ffmpeg convert → whisper-cli transcribe."""
+    """Test microphone input and the configured speech recognition path."""
     import tempfile, textwrap
     if out_path is None:
         out_path = str(Path(tempfile.gettempdir()) / "jarvis_mic_test.wav")
@@ -1940,6 +1984,15 @@ def test_mic(duration=5.0, out_path=None):
     print(f"  Model : {Path(model).name if model else '⚠ not found'}")
     print(f"  Duration: {duration}s")
     print()
+    if not model and shutil.which("termux-speech-to-text") is not None:
+        print("  🧠  Android speech recognition — speak when its prompt appears...\n")
+        text = _termux_stt_fallback()
+        if text:
+            print(f"  ✓   Recognized: {text}\n  ✅  Android STT working!\n")
+            return True
+        print("  ⚠️   Android speech recognition returned no text\n")
+        return False
+
     print(f"  🎤  Recording {duration}s — speak now...")
     print()
 
@@ -1952,12 +2005,13 @@ def test_mic(duration=5.0, out_path=None):
     size = Path(out_path).stat().st_size
     print(f"  ✓   Recorded and converted  ({size} bytes, 16kHz PCM)")
 
-    if not model:
-        print("  ⚠️   No whisper model — recording works but STT is not configured")
-        print("      Set WHISPER_MODEL=/path/to/ggml-base.en.bin")
+    if not model and shutil.which("termux-speech-to-text") is None:
+        print("  ⚠️   No Whisper model or termux-speech-to-text — recording works but STT is unavailable")
+        print("      Install Termux:API for Android speech recognition, or configure WHISPER_MODEL")
         return False
 
-    print(f"  🧠  Transcribing with {Path(model).name}...")
+    engine = Path(model).name if model else "Android speech recognition"
+    print(f"  🧠  Transcribing with {engine}...")
     print()
     text = _transcribe_wav(out_path)
 
@@ -2078,7 +2132,11 @@ def test_mic_vad():
         return True, f"VAD working correctly ({pct:.1f}% speech detected)."
 
 def test_vad_synthetic():
-    import webrtcvad, wave, struct, math, os, tempfile
+    try:
+        import webrtcvad
+    except ImportError:
+        return False, "WebRTC VAD is not installed; install the project's webrtcvad dependency"
+    import wave, struct, math, os, tempfile
     wav_file = Path(tempfile.gettempdir()) / "jarvis_vad_synthetic_test.wav"
     print("  🎙️  Testing WebRTC VAD on synthetic audio (no microphone)", flush=True)
     SAMPLE_RATE = 16000

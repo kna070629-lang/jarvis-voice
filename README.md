@@ -140,9 +140,7 @@ Set `JARVIS_REQUIRE_WAKE_WORD=1` if you want Android STT to confirm the wake phr
 
 ## Speech-to-Text
 
-**Primary:** `termux-speech-to-text` — on-device Android speech recognition, no API key needed.
-
-**Fallback:** OpenAI Whisper API (set `OPENAI_API_KEY`).
+**Local option:** `whisper-cli` with a Whisper model. When no local model is configured, Jarvis opens Android's `termux-speech-to-text` recognizer. The Android path requires the Termux:API package and the matching Android app, with microphone permission granted.
 
 > **Note:** `faster-whisper` is not available on Python 3.13 / Android ARM64 — `ctranslate2` has no compatible wheel.
 
@@ -153,7 +151,7 @@ Set `JARVIS_REQUIRE_WAKE_WORD=1` if you want Android STT to confirm the wake phr
 **Primary:** `termux-tts-speak` — on-device Android neural TTS, no API key needed.
 Check available voices: `termux-tts-engines`
 
-**Fallback:** ElevenLabs or OpenAI TTS (set API key in environment).
+The current TUI uses `termux-tts-speak`. The separate `tts.py` module also contains API-backed engines, but those are not wired into the TUI.
 
 ---
 
@@ -170,6 +168,48 @@ export JARVIS_OPENCLAW_TIMEOUT=90
 
 If OpenClaw is unreachable, a rule-based response generator handles basic commands:
 `hello`, `how are you`, `your name`, `time`, `date`, `weather`, `joke`, `thank`, `bye`
+
+---
+
+## Native Android Companion
+
+The Kotlin companion lives under `android/` and uses the existing Python/OpenClaw backend; it does not replace the terminal assistant.
+
+### Build
+
+The Android module targets Android 14 (API 34), compiles against API 35, and supports Android 8.0+ (API 26). Build it on a machine with JDK 17+, Android SDK platform 35, and Android Build Tools installed:
+
+```bash
+cd android
+./gradlew testDebugUnitTest assembleDebug
+```
+
+The current workspace has Java 21 but no Android SDK or `adb`, so APK generation and device installation have not been verified here. The project includes a Gradle wrapper and pins the Gradle distribution checksum.
+
+### Connect to the existing Termux backend
+
+Run `./jarvis-mobile.sh` in Termux to start the companion backend without activating the TUI microphone loop. It prints the pairing token and binds an authenticated HTTP bridge to `127.0.0.1:8765`; the bridge exposes only `/health` and the structured `chat` action. It does not execute shell commands from AI output. The random bearer token is saved at `~/.config/jarvis/mobile.token` with owner-only permissions. If you instead run the regular `jarvis.sh` TUI, the bridge is started there too; retrieve the token with:
+
+```bash
+python3 mobile_bridge.py --show-token
+```
+
+Use one backend launcher at a time; both use port 8765.
+
+Install the debug APK, paste the token into the app, and select **Save token and connect**. The app stores it encrypted with Android Keystore. Keep the token private. The Android app only connects to loopback and requires either the companion backend or the TUI to be running.
+
+The companion uses Android `SpeechRecognizer` and `TextToSpeech`. Speech recognition availability and whether the configured Android recognition provider processes audio locally depend on the device's selected provider. The app requests microphone access at first use and stops listening when it leaves the foreground. Conversation mode is opt-in and reopens a recognition session after a spoken reply; it is not a wake-word or background-listening feature.
+
+The installed-app picker uses Android package visibility for launchable activities. Short voice commands such as “open Spotify” use fixed Android intents/package lookup. WhatsApp drafts require a number and message, show a confirmation dialog, and open a prefilled WhatsApp conversation; Jarvis never presses Send. Phone opens the dialer without placing a call.
+
+Accessibility and notification access are optional special settings. Accessibility navigation runs only after an in-app action, taps one exact visible label, and ignores password nodes. Notification text is kept in memory (up to 20 items); sending a preview to OpenClaw requires a separate confirmation. Neither capability is activated automatically.
+
+### Verification status
+
+- **Implemented:** Python bridge, native UI/voice code, local app launching, optional notification/accessibility services, confirmation flow.
+- **Build verified:** Python bridge unit tests and static checks can run in this repository; Android build depends on an Android SDK that is not present in this environment.
+- **Installed on device:** Not verified.
+- **Physically tested:** Not verified on the Vivo I2410.
 
 ---
 
@@ -215,18 +255,16 @@ pkill -f tui.py
 
 ## Project Status
 
-**Working:**
-- ✅ WebRTC VAD continuous monitoring
-- ✅ termux-speech-to-text STT
-- ✅ termux-tts-speak TTS
-- ✅ OpenClaw sub-session integration
-- ✅ Emoji face state display
-- ✅ Local fallback responses
-- ✅ `--test-mic` diagnostic flag
+**Implemented (device behavior still needs validation):**
+- WebRTC VAD monitoring with an energy fallback
+- Local Whisper transcription, or Android `termux-speech-to-text` when no Whisper model is configured
+- `termux-tts-speak` responses
+- OpenClaw integration and local fallback responses
+- Terminal face display and `--test-mic` diagnostic
 
-**In progress:**
-- 🔄 VAD threshold tuning on real device
-- 🔄 End-of-utterance detection optimisation
+**Needs Android device validation:**
+- VAD threshold tuning and end-of-utterance behavior
+- Termux:API recognizer, microphone permission, and TTS behavior across Android versions
 
 **Blocked:**
 - ❌ `faster-whisper` / ctranslate2 — no cp313 wheel

@@ -1,7 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # jarvis.sh — Launcher script for Jarvis Voice Assistant
 
-cd /data/data/com.termux/files/home/jarvis-voice
+cd "$(dirname "$0")" || exit 1
 
 # Set environment
 export JARVIS_STT_ENGINE="${JARVIS_STT_ENGINE:-termux-api}"
@@ -27,4 +27,4 @@ if [ -z "${JARVIS_AUTH_TOKEN:-}" ] && [ -f "jarvis.conf" ]; then
 fi
 
 # Run with Python
-python3 jarvis.py "$@"
+exec python3 tui.py "$@"
