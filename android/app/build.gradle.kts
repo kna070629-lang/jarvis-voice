@@ -11,7 +11,9 @@ android {
     // compiling only the components registered by the current manifest.
     sourceSets {
         getByName("main") {
-            java.exclude("com/strognoff/jarvis/**")
+            val activeKotlinSource = "src/main/java/dev/jarvis/companion"
+            java.setSrcDirs(listOf(activeKotlinSource))
+            kotlin.setSrcDirs(listOf(activeKotlinSource))
         }
     }
 
