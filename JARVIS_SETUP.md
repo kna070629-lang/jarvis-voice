@@ -9,7 +9,7 @@ cd ~/jarvis-workspace
 
 This runs the Python-first bridge on `127.0.0.1:8765` without starting the TUI microphone loop. Keep Termux open while using the Android companion. Stop with Ctrl+C. Restart with the same command. For the separate Python terminal voice interface, use `./jarvis.sh`.
 
-The backend creates/uses local SQLite databases under `~/.local/share/jarvis/` with owner-only permissions. It prints the non-secret runtime mode, OpenRouter configuration state, model identifier, search provider name, and memory state. It never prints the pairing token or cloud key.
+The backend creates/uses local SQLite databases under `~/.local/share/jarvis/` with owner-only permissions. It prints the non-secret runtime mode, AI provider order, search provider name, and memory state. It never prints the pairing token or provider credentials.
 
 ## Pair the Android app
 
@@ -24,18 +24,27 @@ Enter that private token in the installed app under **Controls → Secure Python
 
 If Android reports offline, confirm the Termux backend is still running, then return to or relaunch the app so its authenticated loopback health check runs again. Confirm Termux and the Android app are on the same Android user/profile; Android loopback behavior across isolated profiles is not verified here.
 
-## Configure free-only OpenRouter
+## Configure the AI providers
 
-Run the interactive setup; key input is hidden and the key is written to a private local file:
+JARVIS uses the locally installed agent CLIs as text-only chat providers. Authenticate them once with their own commands; do not put keys in this repository:
+
+```bash
+codex login
+opencode auth login
+```
+
+The launcher defaults to Codex primary and OpenCode fallback. You can override the order or model per run:
 
 ```bash
 cd ~/jarvis-workspace
-python3 jarvis_setup.py configure-openrouter
+JARVIS_AI_PRIMARY=opencode JARVIS_AI_FALLBACK=codex ./jarvis-mobile.sh
+JARVIS_AI_TIMEOUT=90 ./jarvis-mobile.sh
+JARVIS_CODEX_MODEL=<model> JARVIS_OPENCODE_MODEL=provider/model ./jarvis-mobile.sh
 ```
 
-Obtain a real key from your OpenRouter account before running this setup. Do not place the key in shell history, source code, Git, or a shared terminal transcript. The file is `~/.config/jarvis/secrets.json` with mode `0600`, inside a `0700` directory. A process environment variable `OPENROUTER_API_KEY` is also supported for users who manage secrets outside the project.
+Each provider runs non-interactively in a throwaway temp home with an empty working directory. Codex uses a read-only sandbox, `--ephemeral`, no user config, no rules, and only a private copy of its auth file. OpenCode runs with `--pure` and every tool denied by inline config. Timeouts, output limits, and process-group cleanup are enforced. JARVIS reports the provider that answered and distinguishes not installed, not logged in, timeout, rate limit, empty output, and unusable output.
 
-JARVIS checks `OPENROUTER_MODEL` against live OpenRouter model metadata before every chat request. Only an explicit `:free` model with zero prompt and completion prices is accepted. The default is `google/gemma-4-31b-it:free`; to select another model, set `OPENROUTER_MODEL` to its exact free variant identifier. If pricing or availability cannot be verified, no chat call is made. No provider or paid model fallback is allowed. OpenRouter usage remains subject to the provider's account and free-tier limits.
+The legacy `python3 jarvis_setup.py configure-openrouter` command and `jarvis_openrouter.py` remain for history and old tests, but neither is used by the active chat path.
 
 Offline operation is explicit:
 
@@ -43,7 +52,7 @@ Offline operation is explicit:
 JARVIS_MODE=offline ./jarvis-mobile.sh
 ```
 
-Offline mode handles local time/date, explicit memory operations, and Android actions supported by the companion. It makes no OpenRouter or live-search request. Without a configured key, web search can still return live Wikipedia results when online; natural AI responses are clearly reported as unavailable.
+Offline mode handles local time/date, explicit memory operations, and Android actions supported by the companion. It makes no AI-provider or live-search request. Online but unauthenticated providers are reported as "not logged in" instead of returning a canned answer.
 
 ## User-approved memory
 
@@ -57,11 +66,11 @@ The long-term memory database is separate from the bounded conversation context.
 
 ## Android permissions and controls
 
-The app requests microphone permission when the user taps the microphone. Android speech recognition may use the device's configured recognition service. Android TTS must have a compatible installed voice/language. Voice language, speed, and pitch are under Controls.
+The microphone button enables the visible foreground wake-phrase service (`RECORD_AUDIO` + `FOREGROUND_SERVICE_MICROPHONE`). It listens for "Hey Jarvis", acknowledges by voice, processes one command, and returns to wake mode. A persistent notification shows while it listens and includes a Stop action. Disable it from the app, the notification, or the service stop command. Android speech recognition may use the device's configured recognition service; the selected language is shared with the wake service. Voice language, speed, pitch, and the preferred masculine voice are under Controls.
 
-App opening uses launchable-app intents. To enable optional capabilities, open **Controls** and use the app's explanation buttons to visit Android settings. Enable notification access or Accessibility there only if desired. Android will require the user to approve those settings. No background microphone or screen-off wake-word feature is provided.
+App activation resolves names through launcher intents with aliases/fuzzy matching. To launch apps from the background wake service, open **Controls → Explain and allow Display over other apps**. Android blocks background activity starts by default; without this grant, wake mode reports "Permission needed: allow Display over other apps" rather than claiming the app is missing. This permission does not read screen content. To enable optional notification or Accessibility features, use the explanation buttons in **Controls**; enable them only if desired.
 
-Calls open the dialer after a confirmation prompt; the user must place the call from the dialer. SMS/WhatsApp drafts show recipient and body, ask for confirmation, and open the native composer; the user must review and send there. Notification summaries preview permitted text and ask before sending it to the configured Python assistant, which may use the configured cloud AI provider.
+Calls are placed only after an in-app confirmation and require the Android Phone permission; without it JARVIS returns a specific permission message and offers the app settings. SMS/WhatsApp drafts show recipient and body, ask for confirmation, and open the native composer; the user must review and send there. Notification summaries preview permitted text and ask before sending it to the configured Python assistant. Accessibility actions are limited to back/home/recents and a confirmed exact visible-label tap.
 
 ## Python checks
 

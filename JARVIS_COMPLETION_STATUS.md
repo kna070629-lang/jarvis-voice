@@ -1,5 +1,7 @@
 # JARVIS completion checkpoint
 
+> Historical checkpoint. The OpenRouter phase below was superseded on 2026-11-10 by the sandboxed Codex/OpenCode provider migration. See `JARVIS_FINAL_REPORT.md` and `JARVIS_TEST_REPORT.md` for current state.
+
 Checkpoint date: 2026-11-09
 
 ## Phase 1 — Audit and backup
