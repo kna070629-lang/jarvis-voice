@@ -8,12 +8,10 @@ android {
     compileSdk = 35
 
     // Keep the earlier package tree in the repository for reference while
-    // compiling only the components registered by the current manifest.
+    // compiling only the current companion package.
     sourceSets {
         getByName("main") {
-            val activeKotlinSource = "src/main/java/dev/jarvis/companion"
-            java.setSrcDirs(listOf(activeKotlinSource))
-            kotlin.setSrcDirs(listOf(activeKotlinSource))
+            java.setSrcDirs(listOf("src/main/java/dev/jarvis/companion"))
         }
     }
 

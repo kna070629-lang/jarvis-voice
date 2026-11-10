@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-tui.py — Jarvis Voice TUI for OpenClaw
+tui.py — Python-first JARVIS Voice TUI
 
 Always-on voice assistant:
 - Uses VAD (termux-microphone-record) for wake detection
 - On wake: speaks "Yes?", listens for question, answers, loops until silence
 - Transcribes speech with whisper-cli (local, no API key needed)
-- Sends to OpenClaw sub-session → speaks back via termux-tts-speak
+- Routes local commands and free-only cloud AI → speaks via termux-tts-speak
 - Animated TUI display
 
 Run: python3 tui.py
@@ -25,9 +25,6 @@ import json
 import re
 import unicodedata
 import traceback
-from urllib import request as urlrequest
-from urllib import error as urlerror
-from urllib.parse import quote
 from pathlib import Path
 
 APP_DIR = Path(__file__).parent
@@ -57,11 +54,7 @@ def _cfg(conf: dict, key: str, default: str) -> str:
 _CONF = _load_conf(APP_DIR / "jarvis.conf")
 
 # ── Config ─────────────────────────────────────────────────────────
-GATEWAY_URL          = _cfg(_CONF, "GATEWAY_URL",          "http://localhost:18789")
-AUTH_TOKEN           = _cfg(_CONF, "AUTH_TOKEN",           "")
-SESSION_KEY          = _cfg(_CONF, "SESSION_KEY",          "agent:main:subagent:jarvis-tui")
-OPENCLAW_SESSION_ID  = _cfg(_CONF, "OPENCLAW_SESSION_ID",  "jarvis-tui")
-OPENCLAW_TIMEOUT     = int(_cfg(_CONF, "OPENCLAW_TIMEOUT", "90"))
+SESSION_KEY          = _cfg(_CONF, "SESSION_KEY",          "jarvis-tui")
 
 # Audio / recording
 SAMPLE_RATE       = 16000
@@ -376,8 +369,7 @@ def _log_system_info():
         "platform": platform.system(),
         "machine": platform.machine(),
         "HAS_VAD": str(HAS_VAD),
-        "GATEWAY_URL": GATEWAY_URL,
-        "SESSION_KEY": SESSION_KEY,
+        "AI_MODE": os.environ.get("JARVIS_MODE", "online"),
         "REQUIRE_WAKE_WORD": str(REQUIRE_WAKE_WORD),
         "WAKE_WORD": f"{WAKE_WORD} (listen {WAKE_WORD_TIMEOUT}s)" if REQUIRE_WAKE_WORD else "(disabled)",
         "ENERGY_THRESHOLD": str(ENERGY_THRESHOLD),
@@ -1367,108 +1359,57 @@ def extract_question(text: str):
     question = text[idx + len(WAKE_WORD):].strip(" ,.!?")
     return True, question
 
-# ── OpenClaw Gateway ────────────────────────────────────────────────
+# ── Python-first engine ─────────────────────────────────────────────
 
 def _reply_from_openclaw_json(data: dict) -> str:
-    result = data.get("result") if isinstance(data, dict) else None
-    if not isinstance(result, dict):
+    if not isinstance(data, dict) or data.get("ok") is False or data.get("status") in {"error", "timeout"}:
         return ""
-    meta = result.get("meta")
-    if isinstance(meta, dict):
-        text = meta.get("finalAssistantVisibleText") or meta.get("finalAssistantRawText")
-        if isinstance(text, str) and text.strip():
-            return text.strip()
-    payloads = result.get("payloads")
-    if isinstance(payloads, list):
-        parts = []
-        for payload in payloads:
-            if isinstance(payload, dict) and isinstance(payload.get("text"), str):
-                parts.append(payload["text"].strip())
-        if parts:
-            return "\n".join(part for part in parts if part).strip()
+
+    # Recent OpenClaw CLI JSON has top-level `final`/`payloads`; Gateway
+    # result wrappers can carry the same fields one level down.
+    candidates = [data]
+    result = data.get("result")
+    if isinstance(result, dict):
+        candidates.insert(0, result)
+    for candidate in candidates:
+        final = candidate.get("final")
+        if isinstance(final, str) and final.strip():
+            return final.strip()
+        meta = candidate.get("meta")
+        if isinstance(meta, dict):
+            text = meta.get("finalAssistantVisibleText") or meta.get("finalAssistantRawText")
+            if isinstance(text, str) and text.strip():
+                return text.strip()
+        payloads = candidate.get("payloads")
+        if isinstance(payloads, list):
+            parts = [
+                payload["text"].strip()
+                for payload in payloads
+                if isinstance(payload, dict)
+                and isinstance(payload.get("text"), str)
+                and payload["text"].strip()
+            ]
+            if parts:
+                return "\n".join(parts)
     return ""
 
-def send_message_cli(text: str) -> str:
-    if shutil.which("openclaw") is None:
-        return ""
-    try:
-        result = subprocess.run(
-            ["openclaw", "agent",
-             "--session-id", OPENCLAW_SESSION_ID,
-             "--message", text,
-             "--json",
-             "--timeout", str(OPENCLAW_TIMEOUT)],
-            capture_output=True, text=True, timeout=OPENCLAW_TIMEOUT + 15
-        )
-    except subprocess.TimeoutExpired:
-        log(f"OpenClaw timed out after {OPENCLAW_TIMEOUT}s")
-        return ""
-    except Exception as e:
-        log(f"OpenClaw CLI error: {e}")
-        return ""
-    if result.returncode != 0:
-        log(f"OpenClaw CLI failed: {(result.stderr or result.stdout).strip()[:240]}")
-        return ""
-    try:
-        return _reply_from_openclaw_json(json.loads(result.stdout))
-    except Exception as e:
-        log(f"OpenClaw JSON parse error: {e}")
-        return ""
+def send_message_cli(text: str, *, local: bool = False) -> str:
+    """Deprecated compatibility shim; runtime requests never start OpenClaw."""
+    return ""
 
 def send_message(session_key: str, text: str) -> str:
-    cli_reply = send_message_cli(text)
-    if cli_reply:
-        return cli_reply
-
-    session = quote(session_key, safe="")
-    url = f"{GATEWAY_URL}/sessions/{session}/messages"
-    payload = json.dumps({
-        "kind": "text",
-        "content": text,
-        "sender": {"id": "jarvis-tui", "label": "jarvis-tui"},
-    }).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    if AUTH_TOKEN:
-        headers["Authorization"] = f"Bearer {AUTH_TOKEN}"
-    req = urlrequest.Request(url, data=payload, headers=headers, method="POST")
     try:
-        with urlrequest.urlopen(req, timeout=60) as resp:
-            body = resp.read().decode("utf-8")
-            if resp.status == 200:
-                return json.loads(body).get("reply", "")
-            log(f"Gateway error: HTTP {resp.status}: {body[:160]}")
-    except urlerror.HTTPError as e:
-        log(f"Gateway error: HTTP {e.code}: {e.read().decode('utf-8', errors='ignore')[:160]}")
-    except Exception as e:
-        log(f"Gateway error: {e}")
-    return ""
+        from jarvis_engine import get_engine
+        return get_engine(session_key).process(text)
+    except Exception:
+        log_exception("Python JARVIS engine failed")
+        return "JARVIS could not process that request locally. No device action was taken."
 
 # ── Local response fallback ──────────────────────────────────────────
 
 def get_response(text: str) -> str:
-    t = text.lower().strip()
-    if any(g in t for g in ["hello", "hi", "hey"]):
-        return "Hello! I'm Jarvis. What can I do for you today?"
-    elif "how are you" in t:
-        return "I'm doing great, thank you for asking!"
-    elif any(g in t for g in ["your name", "who are you"]):
-        return "I'm Jarvis, your personal AI assistant."
-    elif "time" in t:
-        from datetime import datetime
-        return f"It's {datetime.now().strftime('%I:%M %p')}."
-    elif "date" in t:
-        from datetime import datetime
-        return f"Today is {datetime.now().strftime('%A, %B %d')}."
-    elif "weather" in t:
-        return "I can check the weather for you. Which location?"
-    elif "joke" in t:
-        return "Why did the AI cross the road? To get to the other side of the neural network!"
-    elif "thank" in t:
-        return "You're welcome!"
-    elif any(g in t for g in ["bye", "goodbye"]):
-        return "Goodbye! I'll be here when you need me."
-    else:
-        return "I heard you, but I'm not sure how to answer that right now."
+    """Compatibility response entry point backed by the Python engine."""
+    return send_message(SESSION_KEY, text)
 
 # ── VAD Capture Loop ────────────────────────────────────────────────
 class VADLoop:
@@ -1753,29 +1694,10 @@ class JarvisTUI:
             question = " ".join(words[1:]).strip(".,!?;: ")
             log(f"Wake word '{WAKE_WORD}' detected — sending: {question!r}")
 
-        SCREEN.update(status="Sending to OpenClaw...")
+        SCREEN.update(status="Processing with Python JARVIS...")
         response = send_message(SESSION_KEY, question)
-        if response:
-            log(f"OpenClaw replied ({len(response)} chars)")
-            return response
-
-        # OpenClaw not available — use local fallback
-        SCREEN.update(status="OpenClaw unavailable — using local fallback")
-        log("OpenClaw returned empty — using local fallback")
-
-        text = question.lower().strip()
-        if self.pending_intent == "weather_location":
-            self.pending_intent = None
-            location = question.strip()
-            if location.lower().startswith("in "):
-                location = location[3:].strip()
-            return f"I don't have live weather access right now, but I understood the location as {location}."
-
-        response = get_response(question)
-        if "weather" in text and "which location" in response.lower():
-            self.pending_intent = "weather_location"
-        else:
-            self.pending_intent = None
+        log(f"Python JARVIS returned {len(response)} characters")
+        self.pending_intent = None
         return response
 
     def _do_conversation(self, question: str = ""):
@@ -1800,7 +1722,7 @@ class JarvisTUI:
                     # status was already set to "Heard: 'X' — expected 'Y'" by answer_question.
                     SCREEN.update(
                         state="error",
-                        answer=f"⚠  Start with '{WAKE_WORD}' to send to OpenClaw",
+                        answer=f"⚠  Start with '{WAKE_WORD}' to send to JARVIS",
                     )
                     time.sleep(2.5)   # hold on screen so user can read it
                     break
@@ -1853,7 +1775,7 @@ class JarvisTUI:
             _log_session_banner("END (missing commands)")
             sys.exit(1)
 
-        log(f"Gateway: {GATEWAY_URL}  Session: {SESSION_KEY}")
+        log(f"Python JARVIS engine ready  Session: {SESSION_KEY}")
         model = _find_whisper_model()
         if model:
             log(f"Whisper model: {Path(model).name}")
@@ -1865,7 +1787,7 @@ class JarvisTUI:
             from mobile_bridge import start_mobile_bridge
 
             def process_mobile_message(text: str) -> str:
-                return send_message(SESSION_KEY, text) or get_response(text)
+                return send_message(SESSION_KEY, text)
 
             mobile_server, _mobile_thread = start_mobile_bridge(process_mobile_message)
             log("Android companion API listening on loopback port 8765")

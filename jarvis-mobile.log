@@ -1,0 +1,2 @@
+JARVIS Python backend listening on 127.0.0.1:8765; press Ctrl-C to stop.
+Provider status: {'mode': 'online', 'ai': 'codex->opencode', 'ai_primary': 'codex', 'ai_fallback': 'opencode', 'last_provider': 'none', 'search': 'wikipedia_and_open_meteo_no_key', 'memory': 'available'}

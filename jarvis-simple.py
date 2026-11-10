@@ -11,7 +11,7 @@ import time
 import subprocess
 import threading
 
-APP_DIR = "/data/data/com.termux/files/home/jarvis-voice"
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Load face display
 sys.path.insert(0, APP_DIR)
@@ -76,37 +76,9 @@ def play_beep():
 
 
 def get_response(text: str) -> str:
-    """Generate a response using local logic."""
-    text_lower = text.lower().strip()
-
-    if any(g in text_lower for g in ["hello", "hi", "hey"]):
-        return "Hello! How can I help you today?"
-    elif "how are you" in text_lower:
-        return "I'm doing great, thanks for asking! Ready to assist."
-    elif "your name" in text_lower or "who are you" in text_lower:
-        return "My name is Jarvis, your personal AI assistant."
-    elif "thank" in text_lower:
-        return "You're welcome!"
-    elif "bye" in text_lower or "goodbye" in text_lower:
-        return "Goodbye! I'll be here when you need me."
-    elif "time" in text_lower:
-        import datetime
-        now = datetime.datetime.now()
-        return f"It's {now.strftime('%I:%M %p')} in London."
-    elif "date" in text_lower:
-        import datetime
-        now = datetime.datetime.now()
-        return f"Today is {now.strftime('%A, %B %d')}"
-    elif any(q in text_lower for q in ["what", "how", "why", "when", "where", "who", "which"]):
-        return "That's a good question. I'm not sure I have the full answer right now, but I'm always happy to help you find out!"
-    elif "weather" in text_lower:
-        return "I can check the weather for you. What location are you interested in?"
-    elif "joke" in text_lower:
-        return "Why did the AI cross the road? To get to the other side of the neural network!"
-    elif "sing" in text_lower or "song" in text_lower:
-        return "🎵 Doe, a deer, a female deer... Ray, a drop of golden sun! 🎵"
-    else:
-        return "Got it. Let me think about that."
+    """Use the shared local-first engine; no canned AI-like response."""
+    from jarvis_engine import get_engine
+    return get_engine("jarvis-simple").process(text)
 
 
 def main():

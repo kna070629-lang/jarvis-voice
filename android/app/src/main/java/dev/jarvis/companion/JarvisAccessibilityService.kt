@@ -12,6 +12,7 @@ class JarvisAccessibilityService : AccessibilityService() {
     fun navigate(action: String): Boolean = when (action) {
         "back" -> performGlobalAction(GLOBAL_ACTION_BACK)
         "home" -> performGlobalAction(GLOBAL_ACTION_HOME)
+        "recents", "recent apps" -> performGlobalAction(GLOBAL_ACTION_RECENTS)
         else -> false
     }
 

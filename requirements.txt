@@ -10,5 +10,5 @@ faster-whisper>=1.0.0
 # Voice Activity Detection (VAD) - local, no API key needed
 webrtcvad>=2.0.10
 
-# HTTP client (for OpenClaw gateway API calls)
+# HTTP client used by optional legacy STT/TTS providers.
 requests>=2.31.0
