@@ -49,6 +49,10 @@ class WikipediaSearchProvider:
         except SearchUnavailable:
             raise
         except HTTPError as exc:
+            try:
+                exc.close()
+            except Exception:
+                pass
             if exc.code == 429:
                 raise SearchUnavailable("Live web search is rate limited; try again later.") from None
             raise SearchUnavailable(f"Live web search returned HTTP {exc.code}.") from None
@@ -92,6 +96,10 @@ class OpenMeteoWeatherProvider:
         except SearchUnavailable:
             raise
         except HTTPError as exc:
+            try:
+                exc.close()
+            except Exception:
+                pass
             if exc.code == 429:
                 raise SearchUnavailable("Weather service is rate limited; try again later.") from None
             raise SearchUnavailable(f"Weather service returned HTTP {exc.code}.") from None

@@ -1,8 +1,10 @@
 import tempfile
 import json
 import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -106,6 +108,28 @@ class MobileHostTests(unittest.TestCase):
         self.assertEqual("We are discussing a local garden", reopened.history()[0]["content"])
         reopened.set_scope("another-session")
         self.assertEqual([], reopened.history())
+
+    def test_engine_singleton_creation_is_thread_safe(self):
+        created = []
+
+        class SlowEngine:
+            def __init__(self, session_key):
+                time.sleep(0.05)
+                created.append(self)
+
+        old = mobile_host.ENGINE
+        mobile_host.ENGINE = None
+        try:
+            with mock.patch.object(mobile_host, "JarvisEngine", SlowEngine):
+                workers = [threading.Thread(target=mobile_host._engine) for _ in range(6)]
+                for worker in workers:
+                    worker.start()
+                for worker in workers:
+                    worker.join(timeout=2)
+            self.assertEqual(1, len(created))
+            self.assertIs(created[0], mobile_host.ENGINE)
+        finally:
+            mobile_host.ENGINE = old
 
     def test_authenticated_bridge_to_local_engine_end_to_end(self):
         server = create_server(mobile_host.process_message, token="b" * 43, port=0)
