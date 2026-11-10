@@ -20,8 +20,9 @@ from pathlib import Path
 DEFAULT_SAMPLE_RATE = 16000
 DEFAULT_FRAME_DURATION_MS = 30  # 30ms frames
 DEFAULT_AGGRESSIVENESS = 3  # 0-3, higher = more aggressive filtering
-MIN_SPEECH_FRAMES = 3  # Min consecutive speech frames to count as talking
-MIN_SILENCE_FRAMES = 10  # Min silence frames after speech to trigger wake
+MIN_SPEECH_FRAMES = 2  # Min consecutive speech frames to count as talking (reduced for faster detection)
+MIN_SILENCE_FRAMES = 8  # Min silence frames after speech to trigger wake (reduced for faster response)
+MAX_LISTEN_SECONDS = 8  # Max seconds to listen after wake word
 
 
 class WakeWordDetector:

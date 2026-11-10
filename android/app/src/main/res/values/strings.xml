@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">JARVIS Companion</string>
+    <string name="accessibility_description">Optional, user-enabled navigation actions. JARVIS only looks for an exact visible label when you press the tap control, and ignores password fields.</string>
+</resources>

@@ -1,6 +1,7 @@
 """
 tts.py — Text-to-Speech engine
-Supports: termux-tts (on-device), elevenlabs (API), openai-tts (API)
+Supports: termux-tts (on-device, fastest), elevenlabs (API), openai-tts (API)
+Custom voice file support: Set JARVIS_VOICE_FILE env var to use a pre-recorded voice
 """
 
 import os
@@ -13,12 +14,19 @@ class TTSEngine:
         self.config = config
         self.engine = config.tts_engine or "termux-tts"
         self.api_key = config.openai_api_key
+        self.voice_file = getattr(config, "voice_file", "")
 
     def speak(self, text: str):
         """
         Convert text to speech and play it.
+        If voice_file is configured, play that file instead of TTS.
         """
         if not text:
+            return
+
+        # If a custom voice file is configured, play it
+        if self.voice_file and os.path.exists(self.voice_file):
+            self._play_file(self.voice_file)
             return
 
         if self.engine == "termux-tts":
@@ -31,11 +39,11 @@ class TTSEngine:
             self._termux_tts(text)
 
     def _termux_tts(self, text: str):
-        """Use Android's built-in TTS via termux-tts-speak."""
+        """Use Android's built-in TTS via termux-tts-speak (on-device, fastest)."""
         try:
             subprocess.run(
                 ["termux-tts-speak", text],
-                capture_output=True, text=True, timeout=15
+                capture_output=True, text=True, timeout=10
             )
         except FileNotFoundError:
             print("termux-tts-speak not found — install termux-api package")
@@ -55,6 +63,7 @@ class TTSEngine:
 
             # Default voice: "Rachel" — override via config.elevenlabs_voice_id if set
             voice_id = getattr(self.config, "elevenlabs_voice_id", None) or "21m00Tcm4TlvDq8ikWAM"
+            model_id = getattr(self.config, "elevenlabs_model_id", None) or "eleven_monolingual_v1"
             url = f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
             headers = {
                 "Accept": "audio/mpeg",
@@ -63,11 +72,11 @@ class TTSEngine:
             }
             data = {
                 "text": text,
-                "model_id": "eleven_monolingual_v1",
+                "model_id": model_id,
                 "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
             }
 
-            resp = requests.post(url, json=data, headers=headers, timeout=30)
+            resp = requests.post(url, json=data, headers=headers, timeout=20)
             if resp.status_code == 200:
                 import tempfile
                 from pathlib import Path
@@ -75,14 +84,28 @@ class TTSEngine:
                 out_file = temp_dir / "jarvis_tts.mp3"
                 with open(out_file, 'wb') as f:
                     f.write(resp.content)
-                subprocess.Popen(
-                    ["termux-media-player", "play", str(out_file)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+                self._play_file(str(out_file))
             else:
                 print(f"ElevenLabs TTS error: {resp.status_code}")
         except Exception as e:
             print(f"ElevenLabs TTS error: {e}")
+
+    @staticmethod
+    def _play_file(path: str):
+        """Play an audio file with the first available Termux player."""
+        for cmd in (
+            ["termux-media-player", "play", path],
+            ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", path],
+            ["mpv", "--no-video", "--really-quiet", path],
+        ):
+            try:
+                subprocess.Popen(
+                    cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                )
+                return
+            except FileNotFoundError:
+                continue
+        print("No audio player found — install termux-api or ffmpeg")
 
     def _openai_tts(self, text: str):
         """Use OpenAI TTS API."""
@@ -107,16 +130,13 @@ class TTSEngine:
                 "response_format": "mp3"
             }
 
-            resp = requests.post(url, json=data, headers=headers, timeout=30)
+            resp = requests.post(url, json=data, headers=headers, timeout=20)
             if resp.status_code == 200:
                 temp_dir = Path(tempfile.gettempdir())
                 out_file = temp_dir / "jarvis_tts.mp3"
                 with open(out_file, 'wb') as f:
                     f.write(resp.content)
-                subprocess.Popen(
-                    ["termux-media-player", "play", str(out_file)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                )
+                self._play_file(str(out_file))
             else:
                 print(f"OpenAI TTS error: {resp.status_code}")
         except Exception as e:

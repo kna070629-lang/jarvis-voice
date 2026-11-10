@@ -1,240 +1,81 @@
-# Jarvis Voice TUI
+# JARVIS Voice Assistant
 
-**Always-on voice assistant** for Android (Termux) powered by OpenClaw. Listens for your voice, processes commands via AI, and speaks replies out loud.
+An existing Python-first Termux assistant with an authenticated Android companion. Local commands and saved memory run on the device. OpenRouter is an optional cloud provider for natural conversation and reasoning; requests are restricted to explicitly listed zero-priced `:free` model variants, with provider fallback disabled.
 
----
+## Runtime
 
-## Features
+```text
+Android SpeechRecognizer / Android TextToSpeech
+                 │ authenticated loopback HTTP
+                 ▼
+127.0.0.1:8765 — mobile_bridge.py
+                 │
+                 ▼
+jarvis_engine.py — local routing, session context, SQLite memory
+        ├── local commands and Android intent delegation
+        ├── live Wikipedia / Open-Meteo providers (when online)
+        └── OpenRouter free-only chat (when configured and online)
+```
 
-- 🎤 **Continuous voice monitoring** — WebRTC VAD detects speech activity without keeping STT open
-- 👂 **Wake flow** — say `Hey Jarvis`, then ask follow-up questions naturally
-- 🤖 **OpenClaw AI** — sends transcribed commands to an OpenClaw sub-session for rich responses
-- 🔊 **On-device TTS** — reads responses aloud via `termux-tts-speak` (no API keys)
-- 😊 **Animated emoji face** — shows current state (idle / listening / thinking / speaking)
-- 🌐 **No cloud dependencies** — runs entirely on-device (except OpenClaw gateway)
-- 🔓 **Open source** — MIT licensed, self-hosted
+OpenClaw is not required by either launcher. Its existing installation, files, and legacy configuration are retained as rollback material and are not used by the Python-first runtime.
 
----
+## Start the Android backend
 
-## Requirements
-
-- **Android** with [Termux](https://termux.com/) installed
-- **Python 3.13+** (comes with Termux)
-- **termux-api** package (`pkg install termux-api`)
-- **OpenClaw** gateway running on the device (or accessible elsewhere)
-- **Internet** — for OpenClaw AI responses (or use the local fallback)
-
-### Termux packages needed
+In Termux, from this repository:
 
 ```bash
-pkg install termux-api python ffmpeg sox
+cd ~/jarvis-workspace
+./jarvis-mobile.sh
 ```
 
-### Python dependencies
+This starts the Python engine, validates/opens the local SQLite stores, and binds the authenticated bridge to `127.0.0.1:8765`. It does not start the TUI microphone loop. Stop with Ctrl+C. For the separate terminal voice interface, use `./jarvis.sh`; it uses the same Python engine and existing TUI/STT/TTS integration.
+
+Pairing is a one-time local action. With the backend running, run `python3 mobile_bridge.py --show-token` in a separate Termux session and enter the displayed token in **Controls → Secure Python Connection** in Android. Keep it private; do not put it in screenshots, shared logs, source files, or cloud configuration. The app stores it using Android Keystore. The launcher itself never prints the token.
+
+## OpenRouter setup
+
+Cloud chat is disabled until a real OpenRouter key is configured. Enter it through hidden terminal input; do not paste it in a command or source file:
 
 ```bash
-pip install -r requirements.txt
+cd ~/jarvis-workspace
+python3 jarvis_setup.py configure-openrouter
 ```
 
-That's it. No PyTorch, no cloud API keys, no compilation.
+The key is stored in `~/.config/jarvis/secrets.json` with owner-only directory/file permissions. `OPENROUTER_API_KEY` may be supplied by a private process environment instead. JARVIS never prints the key. It checks the selected model against OpenRouter's live model catalog and requires an explicit `:free` identifier with both input and output prices equal to zero immediately before every chat request. The default is `google/gemma-4-31b-it:free`; set `OPENROUTER_MODEL` to another verified free model identifier to change it. There is no paid model or provider fallback. If verification fails, no chat request is sent.
 
----
-
-## Quick Start
+To run without any cloud AI request:
 
 ```bash
-# Clone (or open the repo directory)
-cd ~/jarvis-voice
-
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Run the mic test first to verify audio works
-python3 tui.py --test-mic
-
-# Configure (optional — defaults work for local OpenClaw)
-export JARVIS_GATEWAY_URL="http://localhost:18789"
-export JARVIS_AUTH_TOKEN="your-gateway-token"
-export JARVIS_OPENCLAW_SESSION_ID="jarvis-tui"
-
-# Run!
-python3 tui.py
+JARVIS_MODE=offline ./jarvis-mobile.sh
 ```
 
----
+Local time/date, explicit memory commands, Android app actions, and supported phone integrations remain local. Live search and weather report unavailable in offline mode. A missing or unreachable OpenRouter provider is reported honestly; JARVIS does not substitute canned answers.
 
-## How it works
+## Memory and live search
 
-```
-[Mic] ──► [WebRTC VAD always-on loop]
-              short chunks → 16k mono PCM → 30ms frames
-              Energy fallback (RMS > 800)
-              Speech activity wakes STT
-                    │
-                    ▼
-       [termux-speech-to-text: capture the question]
-                    │
-                    ▼
-          [OpenClaw sub-session: jarvis-tui]
-                    │
-                    ▼
-        [termux-tts-speak + animated emoji face]
-```
+Long-term facts explicitly saved with `Remember this: ...` are stored in `~/.local/share/jarvis/memory.sqlite3`. Memory commands include `What do you remember about me?`, `Forget memory 3`, and `Clear my memory`. Clearing requires the follow-up `confirm clear my memory`; say `cancel memory` to leave data unchanged. Conversation context is separate in `conversations.sqlite3`, bounded to recent turns, and scoped by assistant session. Secret-like content is excluded from both stores.
 
-1. **VAD loop** — always-on, records short chunks, converts them to raw 16 kHz mono PCM, and checks valid 30 ms WebRTC VAD frames
-2. **Wake** — saying `Hey Jarvis` creates speech activity, Jarvis wakes, and then starts Android STT
-3. **Conversation** — ask the question after Jarvis says `Yes?`; follow-up replies do not need `Hey Jarvis`
-4. **AI response** — sends each turn to the same OpenClaw sub-session, with a local fallback if the gateway is unavailable
-5. **Idle timeout** — after 15 seconds of silence, Jarvis returns to waiting for `Hey Jarvis`
-6. **TTS + face** — speaks via `termux-tts-speak` and animates the emoji state in the terminal
+Explicit requests such as “search for …” use the separate no-key Wikipedia API provider and return source URLs. “What is the weather in …” uses Open-Meteo geocoding/current conditions. These services need internet; JARVIS distinguishes current provider results from AI explanation and reports failed searches instead of claiming they succeeded.
 
----
+## Android controls and privacy
 
-## VAD Tuning
+The Android app keeps its existing package `dev.jarvis.companion`, speech recognizer, Android TTS, app discovery, authenticated pairing, notification listener, and optional Accessibility service. Microphone use starts only after the user taps the microphone. The current UI animation reflects actual listening/thinking/speaking/error/offline app state; speaking motion is state-driven because Android TTS audio amplitude is not exposed by the existing integration.
 
-The VAD is configured for natural conversation pauses:
+App launch uses Android intents. Calls open the system dialer only after an in-app confirmation; the user must place the call there. SMS and WhatsApp actions display the recipient and draft, require confirmation, then open the native composer; JARVIS does not press Send. Notification access and Accessibility remain optional settings that the user must enable manually. Notification text is sent for summarization only after a separate preview/confirmation. Accessibility actions are limited to explicit navigation or a confirmed visible-label tap.
 
-| Parameter | Value | Meaning |
-|-----------|-------|---------|
-| Energy threshold | 800 RMS | Sensitivity for quiet speech |
-| Silence threshold | 5 frames (~150ms of VAD frames) | Speech-end confirmation before wake check |
-| Min speech frames | 4 frames (120ms) | Minimum speech to count as speaking |
+The bridge only binds loopback and requires a private bearer token for commands. It accepts a bounded structured chat request; model output is never interpreted as shell or device commands. Health status is returned only to an authenticated health request and contains provider state, not secrets.
 
-### Wake phrase behavior
+## Tests and Android build
 
-WebRTC VAD detects speech activity, not words. Jarvis therefore uses VAD to decide when to wake, then starts Android STT for the question. This avoids needing to say `Hey Jarvis` twice.
-
-You can tune this with:
+Run the Python checks from the repository:
 
 ```bash
-export JARVIS_WAKE_WORD="hey jarvis"
-export JARVIS_REQUIRE_WAKE_WORD=0
-export JARVIS_QUESTION_TIMEOUT=45
-export JARVIS_CONVERSATION_IDLE_TIMEOUT=15
-export JARVIS_STT_CONTINUATION_TIMEOUT=2.5
-export JARVIS_STT_MAX_PARTS=2
-export JARVIS_TTS_SETTLE_SECONDS=0.8
-export JARVIS_TTS_WORDS_PER_MINUTE=155
-export JARVIS_TTS_MAX_WAIT_SECONDS=18
-export JARVIS_OPENCLAW_SESSION_ID="jarvis-tui"
-export JARVIS_OPENCLAW_TIMEOUT=90
+python3 -m py_compile jarvis*.py mobile_bridge.py mobile_host.py tui.py
+python3 -m pytest -q
+bash -n jarvis.sh jarvis-mobile.sh jarvis-bridge.sh
+git diff --check
 ```
 
-Set `JARVIS_REQUIRE_WAKE_WORD=1` if you want Android STT to confirm the wake phrase, but that mode may require saying `Hey Jarvis` again because STT starts after VAD wakes.
+The Android project is under `android/` and uses the existing Gradle wrapper, AGP 8.11.1, Gradle 8.13, and package `dev.jarvis.companion`. The current Termux/Ubuntu environment has no Android SDK, so a local APK build has not been verified here. `.github/workflows/android-debug.yml` provides a manual GitHub Actions debug build and uploads `android/app/build/outputs/apk/debug/app-debug.apk`. See [JARVIS_APK_BUILD.md](JARVIS_APK_BUILD.md) for the exact build and install steps and current verification status.
 
----
-
-## Key files
-
-| File | Purpose |
-|------|---------|
-| `tui.py` | Main entry point — VAD loop + TUI + gateway integration |
-| `wakeword.py` | WebRTC VAD engine + energy fallback |
-| `stt.py` | STT engines (termux-api, OpenAI Whisper API) |
-| `tts.py` | TTS engines (termux-tts-speak, ElevenLabs, OpenAI TTS) |
-| `face.py` | Animated emoji face engine |
-| `config.py` | Environment variable configuration |
-| `requirements.txt` | Python dependencies |
-
----
-
-## Speech-to-Text
-
-**Primary:** `termux-speech-to-text` — on-device Android speech recognition, no API key needed.
-
-**Fallback:** OpenAI Whisper API (set `OPENAI_API_KEY`).
-
-> **Note:** `faster-whisper` is not available on Python 3.13 / Android ARM64 — `ctranslate2` has no compatible wheel.
-
----
-
-## Text-to-Speech
-
-**Primary:** `termux-tts-speak` — on-device Android neural TTS, no API key needed.
-Check available voices: `termux-tts-engines`
-
-**Fallback:** ElevenLabs or OpenAI TTS (set API key in environment).
-
----
-
-## OpenClaw Integration
-
-Connects to OpenClaw through `openclaw agent` using a stable session id, so every voice turn is appended to the same OpenClaw chat context:
-
-```bash
-export JARVIS_OPENCLAW_SESSION_ID="jarvis-tui"
-export JARVIS_OPENCLAW_TIMEOUT=90
-```
-
-### Local fallback
-
-If OpenClaw is unreachable, a rule-based response generator handles basic commands:
-`hello`, `how are you`, `your name`, `time`, `date`, `weather`, `joke`, `thank`, `bye`
-
----
-
-## Running as a Service
-
-```bash
-# Background (survives terminal close)
-nohup python3 tui.py > jarvis.log 2>&1 &
-
-# Watch log
-tail -f jarvis.log
-
-# Stop
-pkill -f tui.py
-```
-
----
-
-## Troubleshooting
-
-**`termux-api not found`** → `pkg install termux-api`
-
-**Mic test fails** → Grant microphone permission to Termux in Android Settings → Apps → Termux → Permissions
-
-**VAD not triggering** → Run with debug output enabled in tui.py (per-chunk RMS logging is already on every 5th iteration)
-
-**Gateway connection refused** → `openclaw gateway start`
-
-**webrtcvad import error** → The package is pre-patched to remove a `pkg_resources` dependency. Reinstall if needed.
-
----
-
-## Known Limitations
-
-| Issue | Cause | Workaround |
-|-------|-------|------------|
-| Wake is VAD-based by default | WebRTC VAD detects voice, not words | Use a quiet environment, or set `JARVIS_REQUIRE_WAKE_WORD=1` for stricter STT wake confirmation |
-| No `faster-whisper` | No ctranslate2 cp313 wheel | Use termux-speech-to-text |
-| No `torch` | download.pytorch.org blocked | WebRTC VAD instead |
-| No `numpy` | No cp313 Android ARM64 wheel | Pure Python RMS fallback |
-
----
-
-## Project Status
-
-**Working:**
-- ✅ WebRTC VAD continuous monitoring
-- ✅ termux-speech-to-text STT
-- ✅ termux-tts-speak TTS
-- ✅ OpenClaw sub-session integration
-- ✅ Emoji face state display
-- ✅ Local fallback responses
-- ✅ `--test-mic` diagnostic flag
-
-**In progress:**
-- 🔄 VAD threshold tuning on real device
-- 🔄 End-of-utterance detection optimisation
-
-**Blocked:**
-- ❌ `faster-whisper` / ctranslate2 — no cp313 wheel
-- ❌ Silero VAD — no torch
-- ❌ True wake-word phrase detection
-
----
-
-## License
-
-MIT
+See [JARVIS_SETUP.md](JARVIS_SETUP.md), [JARVIS_TEST_REPORT.md](JARVIS_TEST_REPORT.md), and [JARVIS_COMPLETION_STATUS.md](JARVIS_COMPLETION_STATUS.md) for setup, evidence, limits, and the current checkpoint.

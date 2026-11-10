@@ -1,6 +1,6 @@
 """
 stt.py — Speech-to-Text engine
-Supports: termux-api (on-device), openai-whisper (API), local (faster-whisper)
+Supports: termux-api (on-device, fastest), openai-whisper (API), local (faster-whisper)
 """
 
 import os
@@ -16,11 +16,12 @@ class STTEngine:
         self.engine = config.stt_engine or "termux-api"
         self.api_key = config.openai_api_key
 
-    def listen(self, timeout: float = 10.0) -> str:
+    def listen(self, timeout: float = 5.0) -> str:
         """
         Listen for speech and return transcribed text.
         Returns empty string on failure/timeout.
         """
+        # Use termux-api as default - it's on-device and fastest (no network)
         if self.engine == "termux-api":
             return self._termux_stt(timeout)
         elif self.engine == "openai":
@@ -30,8 +31,8 @@ class STTEngine:
         else:
             return self._termux_stt(timeout)
 
-    def _termux_stt(self, timeout: float) -> str:
-        """Use termux-speech-to-text for on-device STT (no API key needed)."""
+    def _termux_stt(self, timeout: float = 5.0) -> str:
+        """Use termux-speech-to-text for on-device STT (no API key needed, fastest)."""
         try:
             result = subprocess.run(
                 ["termux-speech-to-text"],
@@ -49,7 +50,7 @@ class STTEngine:
             print(f"STT error: {e}")
             return ""
 
-    def _openai_stt(self, timeout: float) -> str:
+    def _openai_stt(self, timeout: float = 10.0) -> str:
         """Use OpenAI Whisper API."""
         if not self.api_key:
             print("OPENAI_API_KEY not set — falling back to termux-api STT")
@@ -69,8 +70,9 @@ class STTEngine:
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE
             )
             
+            # Record for 3 seconds max
             import time
-            time.sleep(3)  # Record for 3 seconds
+            time.sleep(3)  
             
             # Stop recording
             rec_proc.terminate()
@@ -100,7 +102,7 @@ class STTEngine:
             if audio_file.exists():
                 audio_file.unlink()
 
-    def _local_stt(self, timeout: float) -> str:
+    def _local_stt(self, timeout: float = 5.0) -> str:
         """Use local faster-whisper (if installed and working)."""
         try:
             from faster_whisper import WhisperModel
@@ -169,3 +171,7 @@ class STTEngine:
         # termux-speech-to-text doesn't support file input directly
         # Convert to compatible format and use termux API
         return ""
+
+    def set_engine(self, engine: str):
+        """Set the STT engine."""
+        self.engine = engine
