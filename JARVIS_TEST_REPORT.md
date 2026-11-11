@@ -6,7 +6,7 @@ The results that were actually produced. Nothing here is a target.
 
 | Suite | Command | Result |
 |---|---|---|
-| Android unit tests | `./gradlew :app:testDebugUnitTest` | **79 passed, 0 failed** |
+| Android unit tests | `./gradlew :app:testDebugUnitTest` | **117 passed, 0 failed** |
 | Backend tests | `python3 -m pytest tests/ -q` | **154 passed, 0 failed** |
 | Android compile | `./gradlew :app:compileDebugKotlin` | BUILD SUCCESSFUL |
 | Clean build and package | `./gradlew clean :app:testDebugUnitTest :app:assembleDebug` | BUILD SUCCESSFUL |
@@ -138,7 +138,60 @@ installed application looked like it was missing.
 The access control still holds. A request without a token and a request with
 a wrong token both return HTTP 401.
 
-## 9. What was not tested here
+## 9. The universal app control system
+
+The commands were checked against the running backend on the phone. Every one
+of them produced a device action rather than a sentence of text.
+
+| Command | Result | Level |
+|---|---|---|
+| "open whatsapp" | the `open_app` action, target whatsapp | LAUNCH_SUPPORTED |
+| "open telegram" | the `open_app` action, target telegram | LAUNCH_SUPPORTED |
+| "open instagram" | the `open_app` action, target instagram | SEARCH_SUPPORTED |
+| "open spotify" | the `open_app` action, target spotify | LAUNCH_SUPPORTED |
+| "call ramesh" | the `call_contact` action, target ramesh | WORKFLOW_SUPPORTED |
+| "go back" | the `accessibility` action, navigation back | NAVIGATION_SUPPORTED |
+| "take a screenshot" | the `screenshot` action | LOCAL |
+| "what is on the screen" | the `screenshot` action | LOCAL |
+| "send a WhatsApp message to 919876543210 saying hi" | the `prepare_whatsapp` action, one confirmation | WORKFLOW_SUPPORTED |
+
+None of these reached the model.
+
+The applications from the request that are installed on this phone were
+checked: WhatsApp, Telegram, Instagram, Spotify, YouTube, Flipkart, Myntra,
+GitHub, Termux, ChatGPT, Claude, Canva, Google Docs, Google Classroom,
+DigiLocker, Truecaller, Google Authenticator and JARVIS Companion. Eighteen of
+them are installed and the registry describes twenty nine applications in
+total. Everything else that is installed is still opened by its name through
+the discovery manager, and is reported as `NOT_TESTED` rather than as
+supported.
+
+### The support levels in the registry
+
+| Level | Meaning | Examples |
+|---|---|---|
+| LAUNCH_SUPPORTED | it can be opened by name | Spotify, Termux, ChatGPT, Claude |
+| SEARCH_SUPPORTED | it has a search that can be reached | Instagram, YouTube, Flipkart |
+| TEXT_INPUT_SUPPORTED | text can be entered | WhatsApp, Telegram, Google Docs |
+| WORKFLOW_SUPPORTED | a whole flow can be driven | WhatsApp, Telegram |
+| API_INTEGRATED | an official API is used | GitHub |
+| RESTRICTED | it can be opened, the rest needs the user | TradingView, MetaTrader 5, PhonePe, Paytm, Canva, CapCut, Authenticator |
+| NOT_TESTED | installed, nothing verified about it | everything else |
+
+### What the tests cover
+
+* The registry declares a package, a label and a level for every application,
+  and the identifiers are unique.
+* Every trading, payment and one time code application is `RESTRICTED` and
+  states the reason.
+* A shopping application never places an order.
+* A task is only `COMPLETED` when there is evidence for it.
+* The eight task states are exactly the ones that were asked for.
+* The navigation commands, the screenshot, the call and the app launches are
+  all local, and none of them asks for a confirmation.
+* A message still asks for exactly one confirmation.
+
+## 10. What was not tested here
 
 * The microphone, the recognition and the speech need the phone in a real
   room, so they are on the diagnostics screen for a person to run.
