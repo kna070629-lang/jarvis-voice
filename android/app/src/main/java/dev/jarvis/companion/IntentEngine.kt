@@ -69,6 +69,15 @@ class IntentEngine(
         val sensitive: Boolean = false,
     )
 
+    /** A natural command for one of the supported applications. */
+    data class AppIntent(
+        val pattern: Regex,
+        val packageName: String?,
+        val actionId: String,
+        val arguments: Map<String, (MatchResult) -> String?> = emptyMap(),
+        val packageFor: ((MatchResult) -> String?)? = null,
+    )
+
     /** A local intent: a pre-compiled pattern that maps to a plugin. */
     data class LocalIntent(
         val pluginId: String,
@@ -99,6 +108,9 @@ class IntentEngine(
         }
     }
 
+    /** App actions that need a spoken confirmation before they run. */
+    private val SENSITIVE_APP_ACTIONS = setOf("prepare_message", "open_chat")
+
     /**
      * Cancel words. They are matched exactly and never escalated, so the model
      * can never talk the assistant out of stopping.
@@ -107,6 +119,86 @@ class IntentEngine(
         "stop", "stop listening", "stop jarvis", "jarvis stop", "cancel",
         "never mind", "nevermind", "forget it", "that's all", "thats all",
         "not now", "quit", "disable jarvis",
+    )
+
+    /**
+     * Natural commands for the supported applications.
+     *
+     * Each one names the application, the action of the integration and the
+     * arguments, so the dispatcher can run it without the model.
+     */
+    private val appIntents: List<AppIntent> = listOf(
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:open|launch|start)\\s+(?:my\\s+|the\\s+)?chat\\s+with\\s+(.+?)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = "com.whatsapp",
+            actionId = "open_chat",
+            arguments = mapOf("name" to { match -> match.groupValues[1].trim() }),
+        ),
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:send|write)\\s+(?:a\\s+)?(?:message\\s+)?(?:to\\s+)?(.+?)\\s+to\\s+(.+?)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = "com.whatsapp",
+            actionId = "prepare_message",
+            arguments = mapOf(
+                "text" to { match -> match.groupValues[1].trim() },
+                "name" to { match -> match.groupValues[2].trim() },
+            ),
+        ),
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:search|look up|find)\\s+(?:for\\s+)?(.+?)\\s+(?:in|on)\\s+(chrome|youtube|maps)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = null,
+            actionId = "search",
+            arguments = mapOf("query" to { match -> match.groupValues[1].trim() }),
+            packageFor = { match ->
+                when (match.groupValues[2].lowercase()) {
+                    "chrome" -> "com.android.chrome"
+                    "youtube" -> "com.google.android.youtube"
+                    else -> "com.google.android.apps.maps"
+                }
+            },
+        ),
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:navigate|direct)\\s+(?:me\\s+)?to\\s+(.+?)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = "com.google.android.apps.maps",
+            actionId = "navigate",
+            arguments = mapOf("destination" to { match -> match.groupValues[1].trim() }),
+        ),
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:open|launch|start)\\s+(?:my\\s+|the\\s+)?(whatsapp|telegram|gmail|maps|chrome|youtube|calendar|camera|gallery|files|settings|play store)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = null,
+            actionId = "open",
+            arguments = emptyMap(),
+            packageFor = { match ->
+                when (match.groupValues[1].lowercase()) {
+                    "whatsapp" -> "com.whatsapp"
+                    "telegram" -> "org.telegram.messenger"
+                    "gmail" -> "com.google.android.gm"
+                    "maps" -> "com.google.android.apps.maps"
+                    "chrome" -> "com.android.chrome"
+                    "youtube" -> "com.google.android.youtube"
+                    "calendar" -> "com.android.calendar"
+                    "camera" -> "com.android.camera2"
+                    "gallery" -> "com.google.android.projection.gearhead"
+                    "files" -> "com.android.documentsui"
+                    "settings" -> "com.android.settings"
+                    else -> "com.android.vending"
+                }
+            },
+        ),
     )
 
     /**
@@ -290,7 +382,31 @@ class IntentEngine(
             return Result.Cancelled(elapsedMs(started))
         }
 
-        // Tier 1: structured commands that map to device actions.
+        // Tier 1: the supported applications. These patterns are more precise
+        // than the general ones, so they are tried first.
+        // Tier 1c: natural commands for the supported applications.
+        for (intent in appIntents) {
+            val match = intent.pattern.matchEntire(text) ?: continue
+            val packageName = intent.packageFor?.invoke(match) ?: intent.packageName ?: continue
+            val args = mutableMapOf<String, String>()
+            for ((key, extractor) in intent.arguments) {
+                extractor(match)?.let { args[key] = it }
+            }
+            if (args.values.any { it.isBlank() }) continue
+            val request = ActionRequest.create(
+                "app_action",
+                args + mapOf("package" to packageName, "action" to intent.actionId),
+                requiresConfirmation = intent.actionId in SENSITIVE_APP_ACTIONS,
+                sensitive = intent.actionId in SENSITIVE_APP_ACTIONS,
+            )
+            return Result.Handled(
+                tier = "app",
+                latencyMs = elapsedMs(started),
+                request = request,
+            )
+        }
+
+        // Tier 1b: structured commands that map to device actions.
         val structured = StructuredCommandParser.parse(text)
         if (structured != null) {
             return Result.Handled(

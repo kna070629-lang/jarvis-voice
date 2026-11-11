@@ -26,6 +26,8 @@ from .engines.verification import VerificationEngine
 from .events import ConnectionTracker, EventBus
 from .messages import Message, NodeState, Status
 from .registry import AgentRegistry
+from .github import GitHubClient, find_token
+from .services import ServiceRegistry
 from .topology import CORE_ID, CORE_NAME, all_links, all_nodes, node_name
 
 
@@ -42,6 +44,8 @@ class JarvisCore:
         search=None,
         repository_root: str = "",
         granted_permissions: set[str] | None = None,
+        bridge_url: str = "",
+        github_repository: str = "",
     ):
         self.settings = settings
         self.registry = AgentRegistry()
@@ -58,7 +62,16 @@ class JarvisCore:
         self.planner = PlannerEngine(memory=self.memory, model_router=self.model_router)
         self.search = search
         self.workflows = WorkflowLibrary()
+        self.github = GitHubClient(
+            token=find_token(repository_root),
+            repository=github_repository or "",
+        )
+        self.services = ServiceRegistry(
+            bridge_url=bridge_url or "",
+            repository_root=repository_root or "",
+        )
         self.development_repository = RepositoryContext(repository_root) if repository_root else None
+        self.repository_root = repository_root
 
         self._lock = threading.RLock()
         self._tasks_run = 0
@@ -125,6 +138,9 @@ class JarvisCore:
                 results.append(outcome)
                 if outcome["status"] == Status.FAILED:
                     error = outcome.get("error", "")
+                    # The agent still said something useful, so it is spoken.
+                    if outcome.get("result"):
+                        answer = str(outcome["result"])
                     break
                 if outcome.get("action_request"):
                     action_request = outcome["action_request"]
@@ -417,9 +433,32 @@ class JarvisCore:
                 })
             nodes.append(entry)
 
+        # The external services are real nodes with the state their check found.
+        service_nodes = []
+        for report in self.services.reports():
+            service_nodes.append({
+                "node_id": "service." + report.service_id,
+                "kind": "service",
+                "name": report.name,
+                "cluster": "external",
+                "role": report.purpose[:60],
+                "status": report.state,
+                "detail": report.detail,
+                "capabilities": list(report.actions),
+                "tasks_completed": 0,
+                "tasks_failed": 0,
+                "last_task_id": "",
+                "last_error": report.detail if report.state in ("error", "disconnected") else "",
+                "recent_tasks": list(report.history),
+                "position": [],
+            })
+        nodes.extend(service_nodes)
+
         return {
             "nodes": nodes,
             "links": [link.to_dict() for link in self.tracker.links()],
+            "services": [report.to_dict() for report in self.services.reports()],
+            "service_summary": self.services.summary(),
             "stats": self.stats(),
         }
 
@@ -435,10 +474,16 @@ class JarvisCore:
                 "security": self.security.stats(),
                 "verification": self.verification.stats(),
                 "comms": self.comms.stats(),
+                "services": self.services.summary(),
             }
 
     def recent_messages(self, limit: int = 30) -> list[dict]:
         return self.comms.recent_messages(limit)
+
+    def check_services(self) -> dict:
+        """Test every external service for real."""
+        self.services.check_all()
+        return self.services.summary()
 
     def node_detail(self, node_id: str) -> dict:
         """Everything known about one node, for the inspection panel."""

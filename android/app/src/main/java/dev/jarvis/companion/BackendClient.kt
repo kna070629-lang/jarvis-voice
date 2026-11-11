@@ -181,6 +181,28 @@ object BackendClient {
         return lines.joinToString("\n")
     }
 
+    /** Runs the real connection test for every external service. */
+    fun checkServices(context: Context, token: String): ServiceCheck? {
+        val body = try {
+            get(ENDPOINT.replace("/v1/command", "/v1/services"), token)
+        } catch (_: Exception) {
+            return null
+        }
+        val services = body.optJSONArray("services") ?: return null
+        val lines = mutableListOf<String>()
+        var checked = 0
+        for (index in 0 until services.length()) {
+            val service = services.optJSONObject(index) ?: continue
+            checked++
+            lines.add("${service.optString("name")}: ${service.optString("state")}")
+            lines.add("  ${service.optString("detail")}")
+        }
+        return ServiceCheck(checked, lines.joinToString("\n"))
+    }
+
+    /** The result of the service check. */
+    data class ServiceCheck(val count: Int, val text: String)
+
     private fun get(url: String, token: String, nodeId: String? = null): JSONObject {
         val connection = URL(url).openConnection() as HttpURLConnection
         try {

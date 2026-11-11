@@ -38,7 +38,7 @@ class FakeProvider:
 class CoreTests(unittest.TestCase):
     def setUp(self):
         self.provider = FakeProvider()
-        self.core = JarvisCore(providers=[self.provider])
+        self.core = JarvisCore(providers=[self.provider], repository_root=".")
 
     # -- topology ---------------------------------------------------------
     def test_the_network_has_the_three_levels(self):
@@ -46,8 +46,8 @@ class CoreTests(unittest.TestCase):
         kinds = [node["kind"] for node in nodes]
         self.assertEqual(1, kinds.count("core"))
         self.assertEqual(6, kinds.count("engine"))
-        self.assertEqual(6, kinds.count("cluster"))
-        self.assertEqual(13, len(nodes))
+        self.assertEqual(7, kinds.count("cluster"))
+        self.assertEqual(14, len(nodes))
 
     def test_the_core_is_in_the_middle(self):
         positions = node_positions()
@@ -92,18 +92,28 @@ class CoreTests(unittest.TestCase):
             self.assertTrue(connected, node_id)
 
     # -- registration -----------------------------------------------------
-    def test_all_twelve_agents_are_registered(self):
+    def test_every_agent_is_registered(self):
         agents = self.core.registry.all()
-        self.assertEqual(12, len(agents))
+        self.assertEqual(13, len(agents))
         ids = {agent.id for agent in agents}
         for expected in ("engine.memory", "engine.planner", "engine.model_router",
                          "engine.security", "engine.verification", "engine.comms",
                          "cluster.voice", "cluster.research", "cluster.development",
-                         "cluster.device", "cluster.automation", "cluster.knowledge"):
+                         "cluster.device", "cluster.automation", "cluster.knowledge",
+                         "cluster.qa"):
             self.assertIn(expected, ids)
         # The central core is the thirteenth node and is not an agent.
         self.assertNotIn("core", ids)
         self.assertIn("core", {node["node_id"] for node in all_nodes()})
+
+    def test_the_named_specialist_roles_are_assigned(self):
+        roles = {agent.id: getattr(agent, "role", "") for agent in self.core.registry.all()}
+        self.assertEqual("LUNA", roles["cluster.voice"])
+        self.assertEqual("VEGA", roles["cluster.research"])
+        self.assertEqual("ORION", roles["cluster.development"])
+        self.assertEqual("TITAN", roles["cluster.device"])
+        self.assertEqual("ATLAS", roles["cluster.automation"])
+        self.assertEqual("NOVA", roles["cluster.qa"])
 
     def test_agents_declare_their_capabilities(self):
         for agent in self.core.registry.all():
@@ -279,11 +289,32 @@ class CoreTests(unittest.TestCase):
     # -- live view --------------------------------------------------------
     def test_the_network_view_reports_every_node_and_link(self):
         view = self.core.topology()
-        self.assertEqual(13, len(view["nodes"]))
-        self.assertEqual(30, len(view["links"]))
+        # The architecture nodes, the core, the engines and the clusters, plus
+        # one node for every external service.
+        kinds = [node["kind"] for node in view["nodes"]]
+        self.assertEqual(1, kinds.count("core"))
+        self.assertEqual(6, kinds.count("engine"))
+        self.assertEqual(7, kinds.count("cluster"))
+        self.assertGreaterEqual(kinds.count("service"), 8)
+        self.assertEqual(32, len(view["links"]))
         for node in view["nodes"]:
             self.assertIn("status", node)
             self.assertIn("position", node)
+
+    def test_the_service_states_are_real_and_not_guessed(self):
+        summary = self.core.services.summary()
+        self.assertGreaterEqual(summary["services"], 8)
+        # The local services are checked for real.
+        self.core.services.check("memory.store")
+        self.core.services.check("tools.local")
+        states = {report.service_id: report.state for report in self.core.services.reports()}
+        # The memory and the local tools work without any credential.
+        self.assertEqual("connected", states["memory.store"])
+        self.assertEqual("connected", states["tools.local"])
+        # A service with no credential must never claim to be connected.
+        for report in self.core.services.reports():
+            if report.service_id in ("ai.openrouter", "ai.openai"):
+                self.assertNotEqual("connected", report.state)
 
     def test_the_node_detail_reports_the_links_of_a_node(self):
         detail = self.core.node_detail("engine.memory")

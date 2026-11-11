@@ -21,6 +21,7 @@ import java.util.Locale
 class ActionDispatcher(private val context: Context) {
     private val resolver = AppResolver(context)
     private val contacts = ContactResolver(context)
+    private val integrations = AppIntegrationEngine(context)
     private val ledger = ActionLedger()
 
     /** Whether the flashlight is currently lit, so it can be toggled. */
@@ -91,6 +92,7 @@ class ActionDispatcher(private val context: Context) {
             "read_notifications" -> readNotifications(request)
             "accessibility" -> accessibility(request)
             "call_contact" -> callContact(request)
+            "app_action" -> appAction(request)
             "open_chat" -> openChat(request)
             "click_text" -> clickText(request)
             "toggle_flashlight" -> toggleFlashlight(request)
@@ -183,6 +185,53 @@ class ActionDispatcher(private val context: Context) {
         val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).putExtra("sms_body", body)
         if (!safeStart(intent)) return failure(request, "No messaging app can open that SMS draft.")
         return success(request, "SMS draft opened. JARVIS did not send it.")
+    }
+
+    /**
+     * Runs an action of one of the supported applications.
+     *
+     * The request carries the package of the integration, the action of the
+     * integration and the arguments. A contact name is resolved here, because
+     * only the phone knows the numbers.
+     */
+    private fun appAction(request: ActionRequest): ActionResult {
+        val packageName = request.args["package"].orEmpty()
+        val actionId = request.args["action"].orEmpty()
+        if (packageName.isBlank() || actionId.isBlank()) {
+            return failure(request, "That application action was not understood.")
+        }
+        val integration = integrations.all().firstOrNull { it.packageName == packageName }
+            ?: return failure(request, "That application is not supported.")
+
+        val arguments = mutableMapOf<String, String>()
+        for (key in request.args.keys) {
+            if (key != "package" && key != "action") arguments[key] = request.args[key].orEmpty()
+        }
+
+        // A contact name is turned into a number before the action runs.
+        val name = arguments["name"].orEmpty()
+        if (name.isNotBlank() && arguments["number"].isNullOrBlank()) {
+            if (!contacts.hasPermission()) {
+                return ActionResult(
+                    request.id,
+                    ActionStatus.PERMISSION_REQUIRED,
+                    "Permission needed: Contacts. Allow JARVIS to read contacts so I can find people by name.",
+                )
+            }
+            val contact = contacts.resolve(name)
+                ?: return failure(request, "I could not find a contact called $name.")
+            arguments["number"] = contact.primary.orEmpty()
+            arguments["name"] = contact.name
+        }
+
+        val outcome = integrations.run(integration, actionId, arguments)
+        return if (outcome.ok) {
+            success(request, outcome.message)
+        } else if (outcome.needsPermission.isNotBlank()) {
+            ActionResult(request.id, ActionStatus.PERMISSION_REQUIRED, outcome.message)
+        } else {
+            failure(request, outcome.message)
+        }
     }
 
     /**

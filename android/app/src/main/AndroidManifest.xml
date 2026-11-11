@@ -34,6 +34,16 @@
         android:usesCleartextTraffic="false">
 
         <activity
+            android:name=".VoiceDiagnosticsActivity"
+            android:exported="false"
+            android:label="JARVIS Voice Diagnostics"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
+            android:name=".DiagnosticsActivity"
+            android:exported="false"
+            android:label="JARVIS Diagnostics"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+        <activity
             android:name=".NetworkActivity"
             android:exported="false"
             android:label="JARVIS Network"

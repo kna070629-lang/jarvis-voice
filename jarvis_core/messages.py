@@ -115,6 +115,7 @@ class NodeState:
     kind: str
     name: str
     cluster: str = ""
+    role: str = ""
     status: str = Status.IDLE
     detail: str = ""
     capabilities: list[str] = field(default_factory=list)
@@ -131,6 +132,7 @@ class NodeState:
             "kind": self.kind,
             "name": self.name,
             "cluster": self.cluster,
+            "role": self.role,
             "status": self.status,
             "detail": self.detail,
             "capabilities": list(self.capabilities),

@@ -28,6 +28,7 @@ class Plan:
 # The local rules, ordered from the most specific to the least.
 _RULES: list[tuple[str, str]] = [
     # (task type, pattern) -- the agent is chosen by task type below.
+    ("quality", r"^(?:run\s+)?(?:the\s+)?(?:backend\s+)?(?:tests?|test\s+suite|quality\s+check)\b.*$"),
     ("notify", r"^(?:read|show|check|summari[sz]e)\s+(?:my\s+|the\s+)?notifications?\.?$"),
     ("alarm", r"^(?:set|create)\s+(?:an?\s+)?alarm(?:\s+for)?\s+(.+?)\.?\s*$"),
     ("timer", r"^(?:set|start)\s+(?:a\s+)?timer\s+(?:for\s+)?(\d+)\s*(?:minutes?|mins?|m)\.?\s*$"),
@@ -47,6 +48,7 @@ _RULES: list[tuple[str, str]] = [
 
 # The agent that takes each kind of task.
 _AGENT_FOR_TYPE = {
+    "quality": "cluster.qa",
     "notify": "cluster.device",
     "alarm": "cluster.device",
     "timer": "cluster.device",

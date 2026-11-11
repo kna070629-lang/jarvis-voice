@@ -29,6 +29,9 @@ class Agent:
     #: The permissions the agent needs. The security engine checks these.
     permissions: list[str] = []
 
+    #: The specialist role this agent plays, for example ATLAS or VEGA.
+    role: str = ""
+
     def handle(self, message: Message, context) -> Message:
         """Process a message. Subclasses do the real work."""
         raise NotImplementedError
@@ -52,6 +55,7 @@ class AgentRegistry:
                 kind="agent",
                 name=agent.name or agent.id,
                 cluster=agent.cluster,
+                role=getattr(agent, "role", "") or "",
                 status=Status.IDLE,
                 capabilities=list(agent.capabilities),
             )

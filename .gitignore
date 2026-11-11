@@ -48,3 +48,6 @@ logs/
 vad_chunk.wav
 test_screenshot.png
 web_search_mm.py
+
+# Kotlin build session files
+android/.kotlin/

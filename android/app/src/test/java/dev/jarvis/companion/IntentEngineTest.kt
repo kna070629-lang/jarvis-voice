@@ -57,13 +57,21 @@ class IntentEngineTest {
         assertFalse(engine.isStop("stop the music"))
     }
 
-    @Test fun anAppLaunchIsHandledByTheStructuredTier() {
+    @Test fun anAppLaunchIsHandledByTheAppTier() {
         val result = engine.route("open YouTube")
+        assertTrue(result is IntentEngine.Result.Handled)
+        val handled = result as IntentEngine.Result.Handled
+        assertEquals("app", handled.tier)
+        assertEquals("app_action", handled.request?.type)
+        assertEquals("com.google.android.youtube", handled.request?.args?.get("package"))
+    }
+
+    @Test fun anUnknownAppNameStillUsesTheStructuredTier() {
+        val result = engine.route("open my weird tool thing")
         assertTrue(result is IntentEngine.Result.Handled)
         val handled = result as IntentEngine.Result.Handled
         assertEquals("structured", handled.tier)
         assertEquals("open_app", handled.request?.type)
-        assertEquals("YouTube", handled.request?.args?.get("name"))
     }
 
     @Test fun aSensitiveCommandStillAsksForConfirmation() {

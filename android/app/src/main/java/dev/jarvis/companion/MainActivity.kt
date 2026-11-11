@@ -295,8 +295,8 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         button(page, "Explain and allow Display over other apps", false) { requestOverlayPermission() }
 
         section(page, "VOICE")
-        val languageTags = listOf("en-US", "en-IN", "hi-IN")
-        languageSpinner = spinner(page, listOf("English (United States)", "English (India)", "Hindi (India)"))
+        val languageTags = VoiceCapabilities.LANGUAGES.map { it.tag }
+        languageSpinner = spinner(page, VoiceCapabilities.LANGUAGES.map { it.label })
         languageSpinner.setSelection(languageTags.indexOf(languageTag).coerceAtLeast(0), false)
         languageSpinner.onItemSelectedListener = SimpleItemSelectedListener { position ->
             val next = languageTags.getOrElse(position) { "en-US" }
@@ -357,6 +357,20 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
             false,
             8,
         )
+        button(page, "Open the system diagnostics", false) {
+            try {
+                startActivity(Intent(this, DiagnosticsActivity::class.java))
+            } catch (_: Exception) {
+                Toast.makeText(this, "The diagnostics could not be opened", Toast.LENGTH_SHORT).show()
+            }
+        }
+        button(page, "Open the voice diagnostics", false) {
+            try {
+                startActivity(Intent(this, VoiceDiagnosticsActivity::class.java))
+            } catch (_: Exception) {
+                Toast.makeText(this, "The voice diagnostics could not be opened", Toast.LENGTH_SHORT).show()
+            }
+        }
         button(page, "Open the live network", false) {
             try {
                 startActivity(Intent(this, NetworkActivity::class.java))

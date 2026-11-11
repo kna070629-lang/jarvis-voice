@@ -120,7 +120,7 @@ object NetworkPalette {
         "processing" -> 0xFF9B6BFF.toInt()
         "executing" -> 0xFF59E3A0.toInt()
         "waiting_approval" -> 0xFFFFC24B.toInt()
-        "completed" -> 0xFF59E3A0.toInt()
+        "completed" -> 0xFF2FB98A.toInt()
         "failed" -> 0xFFFF6B6B.toInt()
         "cancelled" -> 0xFFFFC24B.toInt()
         "idle" -> 0xFF2E6E8E.toInt()

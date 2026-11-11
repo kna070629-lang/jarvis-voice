@@ -38,6 +38,7 @@ OUTER_CLUSTERS = [
     ("cluster.device", "Android and Device Control"),
     ("cluster.automation", "Automation and Tools"),
     ("cluster.knowledge", "Knowledge and Learning"),
+    ("cluster.qa", "Quality Assurance"),
 ]
 
 
@@ -57,11 +58,11 @@ def _ring(count: int, radius: float, start_degrees: float = -90.0) -> list[tuple
 def node_positions() -> dict[str, tuple[float, float]]:
     """Every node with its position as a fraction of the canvas."""
     positions: dict[str, tuple[float, float]] = {CORE_ID: (0.5, 0.5)}
-    for (node_id, _), (x, y) in zip(INNER_ENGINES, _ring(6, 0.215, -90.0)):
+    for (node_id, _), (x, y) in zip(INNER_ENGINES, _ring(len(INNER_ENGINES), 0.215, -90.0)):
         positions[node_id] = (x, y)
     # The satellites sit on the same spokes but further out, turned slightly so
     # the ring and the satellites do not line up into spokes.
-    for (node_id, _), (x, y) in zip(OUTER_CLUSTERS, _ring(6, 0.435, -60.0)):
+    for (node_id, _), (x, y) in zip(OUTER_CLUSTERS, _ring(len(OUTER_CLUSTERS), 0.435, -60.0)):
         positions[node_id] = (x, y)
     return positions
 

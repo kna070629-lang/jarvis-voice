@@ -194,8 +194,14 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
             .getString("language_tag", null)
             .orEmpty()
         val system = Locale.getDefault().toLanguageTag()
-        return listOf(saved, system, "en-US", "en-GB")
-            .filter { it == "en" || it == "hi" || it.startsWith("en-") || it.startsWith("hi-") }
+        // The saved language comes first, then the device language, then the
+        // full supported list. Tamil and Indian English are included because
+        // they are part of the supported set.
+        val preferred = listOf(saved, system) +
+            VoiceCapabilities.LANGUAGES.map { it.tag }
+        return preferred
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
             .map { Locale.forLanguageTag(it).toLanguageTag() }
             .filter { it.isNotBlank() && it != "und" }
             .distinct()
@@ -307,6 +313,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         }
 
         override fun onError(error: Int) {
+            recordError("recognition error $error")
             if (startingRecognition && error == SpeechRecognizer.ERROR_CLIENT) return
             startingRecognition = false
             when (error) {
@@ -860,6 +867,16 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
          * Live microphone level from the recogniser, 0 to 1. The interface
          * reads it so the core can react to the voice while it listens.
          */
+        /** The last recognition error, so the diagnostics screen can show it. */
+        @Volatile
+        var lastError: String = ""
+            private set
+
+        /** Records the last recognition error. */
+        internal fun recordError(message: String) {
+            lastError = message
+        }
+
         @Volatile
         var micLevel: Float = 0f
 

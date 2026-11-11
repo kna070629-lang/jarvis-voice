@@ -439,10 +439,15 @@ class FallbackAIProvider:
     def names(self) -> list[str]:
         return [getattr(provider, "name", provider.__class__.__name__) for provider in self.providers]
 
-    def ask(self, text: str, context: str | None = None) -> AIReply:
+    def ask(self, text: str, context: str | None = None, capability: str = "") -> AIReply:
         failures: list[ProviderError] = []
         for provider in self.providers:
             name = getattr(provider, "name", provider.__class__.__name__)
+            if capability:
+                checker = getattr(provider, "supports", None)
+                if callable(checker) and not checker(capability):
+                    failures.append(f"{name}: does not support {capability}")
+                    continue
             try:
                 reply = provider.ask(text, context)
             except ProviderError as exc:
@@ -507,6 +512,9 @@ def build_default_provider(settings) -> FallbackAIProvider:
     factories = {
         "codex": lambda: CodexProvider(timeout=timeout, model=codex_model),
         "opencode": lambda: OpenCodeProvider(timeout=timeout, model=opencode_model),
+        "openai": lambda: _openai_provider(timeout),
+        "openrouter": lambda: _openrouter_provider(timeout),
+        "compatible": lambda: _compatible_provider(timeout),
         # The server provider keeps one warm process and session, so it answers
         # in seconds instead of spawning a runtime for every question. It is
         # given a short timeout because the shared inference backend sometimes
@@ -521,6 +529,24 @@ def build_default_provider(settings) -> FallbackAIProvider:
     if not ordered:
         ordered = [CodexProvider(timeout=timeout, model=codex_model), OpenCodeProvider(timeout=timeout, model=opencode_model)]
     return FallbackAIProvider(ordered)
+
+
+def _openai_provider(timeout: float):
+    from jarvis_cloud_providers import OpenAIProvider
+
+    return OpenAIProvider(timeout=timeout)
+
+
+def _openrouter_provider(timeout: float):
+    from jarvis_cloud_providers import OpenRouterProvider
+
+    return OpenRouterProvider(timeout=timeout)
+
+
+def _compatible_provider(timeout: float):
+    from jarvis_cloud_providers import OpenAICompatibleProvider
+
+    return OpenAICompatibleProvider(timeout=timeout)
 
 
 def _server_provider(settings, timeout: float):

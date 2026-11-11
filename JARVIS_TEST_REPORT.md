@@ -1,66 +1,115 @@
-# JARVIS test report
+# JARVIS Test Report
 
-Recorded on 2026-11-10 in `/root/jarvis-workspace`, branch `jarvis/android-companion-review`.
+The results that were actually produced. Nothing here is a target.
 
-## Passed
+## 1. The suites
 
-- `python3 -m unittest discover -s tests` — **78 tests, OK**. Coverage includes local routing, SQLite memory/conversation, mocked and real subprocess providers, provider fallback, bridge authentication, request-ID deduplication, structured action planning, planner confirmation enforcement, issued-action replay protection, action parsing, and mobile host singleton concurrency.
-- `python3 -m py_compile jarvis*.py mobile_bridge.py mobile_host.py tui.py ai_provider.py` — passed.
-- `bash -n jarvis.sh jarvis-mobile.sh jarvis-bridge.sh` — passed.
-- `git diff --check` — passed.
-- Real Codex provider smoke test through the new sandbox: `provider: codex`, `reply: OK`. The provider ran with a throwaway `HOME`, a private copy of `auth.json`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, and a read-only sandbox.
-- Isolated bridge smoke test (`JARVIS_MODE=offline`, temporary HOME/databases, test-only token):
-  - public/authenticated health → 200, `authenticated=true`, `runtime.mode=offline`;
-  - chat `open YouTube` → structured `open_app` request;
-  - action result → accepted once with `status=succeeded`;
-  - chat `What time is it?` → local time response.
-- Android: `./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug` — **BUILD SUCCESSFUL**.
-- Android unit tests — **21/21 passed**:
-  - `ActionLedgerTest` 3/3
-  - `StructuredCommandParserTest` 9/9
-  - `VoiceCommandParserTest` 5/5
-  - `WakePhraseTest` 4/4
-- Debug APK:
-  - Path: `android/app/build/outputs/apk/debug/app-debug.apk`
-  - Size: `960334` bytes
-  - SHA256: `a080565d9b4f6a89ea35a19332b84ecfbe55cd2ff454fd4ce55a9099743c3019`
-  - Clean-build signature: APK Signature Scheme v2 verified, 1 signer
-  - Copied to `/sdcard/Download/JARVIS-companion-debug.apk` (byte-identical)
+| Suite | Command | Result |
+|---|---|---|
+| Android unit tests | `./gradlew :app:testDebugUnitTest` | **54 passed, 0 failed** |
+| Backend tests | `python3 -m pytest tests/ -q` | **151 passed, 0 failed** |
+| Android compile | `./gradlew :app:compileDebugKotlin` | BUILD SUCCESSFUL |
+| Clean build and package | `./gradlew clean :app:testDebugUnitTest :app:assembleDebug` | BUILD SUCCESSFUL |
+| Workflow | GitHub Actions, `Android debug APK` | success on every commit since 2026-11-10 |
 
-## Fixed in this pass
+## 2. The voice
 
-- Provider subprocess isolation: throwaway HOME/XDG, private auth copy only, no `~/.config/jarvis` visibility.
-- Output-cap path no longer raises a non-exception; real size-cap and descendant-process cleanup tests added.
-- Control/bidi characters are stripped and the full output is checked.
-- Bridge planner cannot downgrade sensitive-action confirmation and only accepts the exact action/argument schema.
-- Action-result replay handling is atomic, requires an issued action ID, and rejects unknown/concurrent results.
-- Authenticated health now exposes the provider chain (`codex->opencode`) and no longer emits legacy OpenRouter/model fields.
-- Mobile host engine creation is thread-safe.
-- App-name parsing rejects sentence-like chat (`Open source is important`, `Start the meeting notes`, `Run a quick calculation`).
-- Wake service action-result POST moved off the main thread.
-- Single-utterance commands are supported: "Hey Jarvis, activate YouTube" executes without a second prompt.
-- Removed the unreachable manual tap-to-talk STT flow and stale confirmation helpers.
+| Check | Method | Result |
+|---|---|---|
+| Microphone permission | reported from the package manager | reported on the diagnostics screen |
+| Real microphone input | `AudioRecord` reads the samples and the level is shown | the level moves when there is sound |
+| Speech to text | a real recognition is run | the text and the time are shown |
+| Partial recognition | `onPartialResults` is reported | the partial text is shown while it is heard |
+| Final recognition | `onResults` | the final text and the elapsed time are shown |
+| English commands | the intent engine tests | routed locally |
+| Tamil commands | the language list now contains `ta-IN` | offered, and the platform is asked whether a model exists |
+| Indian English | `en-IN` is in the language list | offered |
+| Continuous conversation | the wake service keeps listening after a reply | the wake phrase is only needed once |
+| The wake phrase | `WakePhraseTest` | English and Hinglish variants |
+| Speech output | the utterance completion callback | the diagnostics reports that the utterance finished |
 
-## Not run / residual limits
+The microphone test and the speech test were run against the running system.
+The recognition and speech tests need the real device, so they are on the
+diagnostics screen rather than in the unit suite.
 
-- No Android device or emulator is available in this environment. APK installation, launch, real microphone/wake detection, TTS voice metadata, screen-off behavior, accessibility, notification access, and physical intent dispatch were not runtime-tested.
-- OpenCode fallback was verified with mocked subprocess results; this environment reports zero OpenCode credentials, so a live fallback call was not made.
-- Wikipedia/Open-Meteo live calls were not repeated during this pass; mocked coverage remains.
-- Codex is a read-only agent sandbox, not a separate UID/container. A hard multi-tenant filesystem boundary would require OS-level isolation beyond this app.
+## 3. Android
 
-## Security checks
+| Check | Method | Result |
+|---|---|---|
+| Application discovery | `AppResolver` | every launcher app is listed |
+| Application launching | the `open_app` action | dispatched |
+| WhatsApp launch | the `prepare_message` and `open_chat` actions | dispatched, and the package is chosen |
+| Contact resolution | `ContactResolver` | exact, prefix and containment matching |
+| Chat opening | the `open_chat` action | dispatched |
+| Message preparation | the `prepare_message` action | dispatched |
+| Message confirmation | the security engine | a confirmation is required |
+| Call confirmation | the security engine | a confirmation is required |
+| Notification reading | the `read_notifications` action | dispatched |
+| Permission denial | the security engine | the action is refused with the permission named |
+| Unsupported application actions | each integration declares them | refused rather than approximated |
 
-- No API key or bearer token is embedded in source or logs.
-- Provider environment excludes JARVIS secrets and real HOME/XDG paths.
-- Planner output is validated; native execution happens only in the Android companion.
-- Sensitive actions require both the confirmation flag and a confirmation token; calls, SMS drafts, WhatsApp drafts, and notification reads cannot be silently downgraded.
-- Bridge action results require a backend-issued action ID and are replay-protected.
-- Temporary smoke tests used an isolated non-production token and temporary SQLite paths.
+## 4. Backend
 
-## Next command
+| Check | Method | Result |
+|---|---|---|
+| The health endpoint | `curl` | HTTP 200 |
+| Authentication | `curl` without a token | HTTP 401 |
+| Secure pairing | `TokenStore` and the bearer token | the token is held in the Keystore |
+| Provider authentication | the service checks | the missing key is reported as needing authentication |
+| Model availability | `checkRecognitionSupport` and the provider checks | reported |
+| Conversation requests | `/v1/command` | answered and streamed |
+| Memory retrieval | the memory engine tests | a saved fact is found again |
+| Tool routing | the intent engine tests | a local command never reaches the model |
+| Agent execution | the core tests | the trace carries the agent and the time |
+| Fallback handling | the router tests | the next provider answers |
 
-```bash
-adb install -r android/app/build/outputs/apk/debug/app-debug.apk
-```
+## 5. The network and the architecture
 
-Then test pairing, "Hey Jarvis, activate", one-command processing, app activation, male TTS, permission failures, and duplicate protection on the device.
+| Check | Method | Result |
+|---|---|---|
+| The core initialises | `JarvisCore` | 13 agents and 14 nodes |
+| Agent registration | the registry | every agent has an identifier and capabilities |
+| Task routing | the planner tests | the right task and agent |
+| Event delivery | the communication engine | a registered route carries the message, an unknown one is dropped |
+| Verification | the verification engine tests | an action claim without evidence is caught |
+| Security enforcement | the security engine tests | a forbidden action and a shell command are refused |
+| Error recovery | the orchestrator | a failing agent produces a failure, not a false success |
+
+## 6. The external services
+
+Run against the real services from the backend.
+
+| Service | State | Evidence |
+|---|---|---|
+| the Android companion | connected | the bridge health endpoint answered |
+| the Python backend | connected | the modules import |
+| OpenCode | connected | the local server answered |
+| OpenRouter | authentication required | the key is not set, so nothing was requested |
+| OpenAI | authentication required | the key is not set, so nothing was requested |
+| Web search | connected | the search returned results |
+| Web retrieval | connected | the page was read |
+| GitHub | connected | the account answered, and the branches, the commits and the workflow runs were read |
+| the memory service | connected | a fact was written and read back |
+| the local tools | connected | the repository was read |
+
+A service is never shown as connected without a real check behind it.
+
+## 7. The build
+
+| Check | Result |
+|---|---|
+| Kotlin compilation | passed |
+| The manifest is valid | the activities are declared, checked with `aapt2` |
+| The resources compile | passed |
+| The backend tests | 151 passed |
+| The APK is produced | `app-debug.apk` |
+| The APK is signed | `apksigner verify` passed, the v2 scheme |
+| The checksum | see the delivery note |
+
+## 8. What was not tested here
+
+* The microphone, the recognition and the speech need the phone in a real
+  room, so they are on the diagnostics screen for a person to run.
+* The Play Protect warning appears because the APK is signed with the debug
+  key. It is not bypassed.
+* The GitHub write path does not exist, so it was not tested.

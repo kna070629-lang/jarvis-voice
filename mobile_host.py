@@ -16,7 +16,7 @@ from jarvis_search import WikipediaSearchProvider
 from jarvis_core import JarvisCore
 from jarvis_engine import JarvisEngine
 from jarvis_selfcheck import SelfCheck
-from mobile_bridge import create_server
+from mobile_bridge import HOST, PORT, create_server
 
 
 log = logging.getLogger("jarvis.mobile")
@@ -37,6 +37,8 @@ def core() -> JarvisCore:
                     providers=_core_providers(),
                     search=WikipediaSearchProvider(),
                     repository_root=str(Path(__file__).parent),
+                    bridge_url=f"http://{HOST}:{PORT}",
+                    github_repository=os.environ.get("JARVIS_GITHUB_REPOSITORY", "kna070629-lang/jarvis-voice"),
                 )
     return _CORE
 

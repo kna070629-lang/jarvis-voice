@@ -11,6 +11,7 @@ the number of providers stays small and the fallback behaviour is uniform.
 from __future__ import annotations
 
 import logging
+import subprocess
 import time
 from typing import Any
 
@@ -85,6 +86,7 @@ class VoiceConversationAgent(ClusterAgent):
     id = "cluster.voice"
     name = "Voice and Conversation"
     cluster = "cluster.voice"
+    role = "LUNA"
     capabilities = ["answer", "conversation", "time", "date", "speak"]
     permissions: list[str] = []
 
@@ -131,6 +133,7 @@ class ResearchAgent(ClusterAgent):
     id = "cluster.research"
     name = "Research and Web"
     cluster = "cluster.research"
+    role = "VEGA"
     capabilities = ["research", "search", "summarise", "fact_check"]
     permissions: list[str] = []
 
@@ -187,6 +190,7 @@ class DevelopmentAgent(ClusterAgent):
     id = "cluster.development"
     name = "Development and Coding"
     cluster = "cluster.development"
+    role = "ORION"
     capabilities = ["review", "analyse", "debug", "generate", "test"]
     permissions: list[str] = []
 
@@ -206,9 +210,34 @@ class DevelopmentAgent(ClusterAgent):
                 notes = repository.summary()
             except Exception:
                 notes = ""
-        prompt = request
+        # The development intelligence reads the real repository when it can.
+        github = getattr(self.core, "github", None)
+        context_lines: list[str] = []
         if notes:
-            prompt = f"{request}\n\nRepository context:\n{notes}"
+            context_lines.append(notes)
+        if github is not None and github.installed():
+            try:
+                info = github.repository_info()
+                context_lines.append(
+                    f"GitHub: {info['name']} default branch {info['default_branch']}, "
+                    f"{info['open_issues']} open issues, pushed {info['pushed_at']}"
+                )
+                for commit in github.commits(5):
+                    context_lines.append(f"commit {commit['sha']} {commit['message']}")
+                reply.evidence.append(self.evidence(
+                    "github",
+                    f"read {info['name']} from GitHub",
+                    repository=info["name"],
+                ))
+            except Exception as exc:
+                reply.evidence.append(self.evidence(
+                    "github",
+                    f"the repository could not be read ({type(exc).__name__})",
+                ))
+
+        prompt = request
+        if context_lines:
+            prompt = f"{request}\n\nRepository context:\n" + "\n".join(context_lines)
         answer = self.core.model_router.complete(prompt, self._context_text())
         if not answer["text"]:
             reply.status = Status.FAILED
@@ -232,6 +261,7 @@ class DeviceControlAgent(ClusterAgent):
     id = "cluster.device"
     name = "Android and Device Control"
     cluster = "cluster.device"
+    role = "TITAN"
     capabilities = ["launch", "call", "message", "alarm", "volume", "media", "flashlight", "notify"]
     permissions: list[str] = ["android.permission.READ_CONTACTS", "android.permission.CALL_PHONE"]
 
@@ -306,6 +336,7 @@ class AutomationAgent(ClusterAgent):
     id = "cluster.automation"
     name = "Automation and Tools"
     cluster = "cluster.automation"
+    role = "ATLAS"
     capabilities = ["workflow", "tool", "coordinate"]
     permissions: list[str] = []
 
@@ -350,6 +381,7 @@ class KnowledgeAgent(ClusterAgent):
     id = "cluster.knowledge"
     name = "Knowledge and Learning"
     cluster = "cluster.knowledge"
+    role = "VEGA"
     capabilities = ["knowledge", "recall", "learn", "enrich"]
     permissions: list[str] = []
 
@@ -418,6 +450,70 @@ class RepositoryContext:
         )
 
 
+class QualityAssuranceAgent(ClusterAgent):
+    """Runs the real checks and reports what actually happened.
+
+    The agent never claims a suite passed. It runs the command, reads the
+    exit code and the summary, and reports that.
+    """
+
+    id = "cluster.qa"
+    name = "Quality Assurance"
+    cluster = "cluster.qa"
+    role = "NOVA"
+    capabilities = ["test", "verify", "audit", "quality"]
+    permissions: list[str] = []
+
+    def handle(self, message: Message, context) -> Message:
+        request = message.payload.get("request") or ""
+        reply = message.copy()
+        reply.agent_id = self.id
+        reply.source = self.id
+        reply.destination = "core"
+        reply.status = Status.COMPLETED
+
+        root = getattr(self.core, "repository_root", "")
+        if not root:
+            reply.status = Status.FAILED
+            reply.error = "no repository"
+            reply.result = "I do not know where the repository is."
+            return reply
+
+        command = ["python3", "-m", "pytest", "tests/", "-q"]
+        try:
+            completed = subprocess.run(
+                command,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+        except Exception as exc:
+            reply.status = Status.FAILED
+            reply.error = type(exc).__name__
+            reply.result = f"The test run could not start: {exc}"
+            return reply
+
+        output = (completed.stdout or "") + (completed.stderr or "")
+        tail = "\n".join(output.strip().splitlines()[-4:])
+        passed = completed.returncode == 0
+        reply.result = (
+            f"The backend test suite passed.\n{tail}"
+            if passed else
+            f"The backend test suite failed with exit code {completed.returncode}.\n{tail}"
+        )
+        reply.evidence.append(self.evidence(
+            "test_run",
+            f"pytest exit code {completed.returncode}",
+            command=" ".join(command),
+            exit_code=completed.returncode,
+        ))
+        if not passed:
+            reply.status = Status.FAILED
+            reply.error = "the test suite failed"
+        return reply
+
+
 def _message_arguments(argument: str) -> dict:
     """Split "to 919876543210 saying hello" into the number and the text."""
     text = str(argument or "").strip()
@@ -448,4 +544,5 @@ def build_clusters(core) -> list[Agent]:
         DeviceControlAgent(core),
         AutomationAgent(core),
         KnowledgeAgent(core),
+        QualityAssuranceAgent(core),
     ]

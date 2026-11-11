@@ -44,6 +44,7 @@ class ModelRouter:
         self._history: list[ModelCall] = []
         self._last_provider = ""
         self._last_model = ""
+        self._tokens = {"prompt": 0, "completion": 0, "total": 0}
 
     def add_provider(self, provider) -> None:
         with self._lock:
@@ -80,8 +81,11 @@ class ModelRouter:
             })
         return report
 
-    def complete(self, prompt: str, context: str = "") -> dict:
+    def complete(self, prompt: str, context: str = "", capability: str = "") -> dict:
         """Ask the first provider that answers.
+
+        When [capability] is given, a provider that does not support it is
+        skipped, so a request is never sent to a model that cannot do it.
 
         Returns a dict with the text, the provider that answered and the
         list of failures for the ones that did not.
@@ -100,6 +104,12 @@ class ModelRouter:
                 failures.append(f"{name}: not installed")
                 self._record(name, getattr(provider, "model", ""), False, 0, "not installed")
                 continue
+            if capability:
+                supports = getattr(provider, "supports", None)
+                if callable(supports) and not supports(capability):
+                    failures.append(f"{name}: does not support {capability}")
+                    self._record(name, getattr(provider, "model", ""), False, 0, "no capability")
+                    continue
             started = time.perf_counter()
             try:
                 reply = provider.ask(prompt, context) if context else provider.ask(prompt)
@@ -118,6 +128,7 @@ class ModelRouter:
                 continue
             provider_name = getattr(reply, "provider", name)
             self._record(provider_name, getattr(provider, "model", ""), True, duration, "")
+            self._add_tokens(provider)
             with self._lock:
                 self._last_provider = provider_name
                 self._last_model = getattr(provider, "model", "")
@@ -166,6 +177,20 @@ class ModelRouter:
             }
         return self.complete(prompt, context)
 
+    def _add_tokens(self, provider) -> None:
+        """Take the token count the provider reported, when it reports one."""
+        usage = getattr(provider, "usage", None)
+        if usage is None:
+            return
+        with self._lock:
+            self._tokens["prompt"] += int(getattr(usage, "prompt", 0) or 0)
+            self._tokens["completion"] += int(getattr(usage, "completion", 0) or 0)
+            self._tokens["total"] += int(getattr(usage, "total", 0) or 0)
+
+    def tokens(self) -> dict:
+        with self._lock:
+            return dict(self._tokens)
+
     def _record(self, provider: str, model: str, ok: bool, duration_ms: int, error: str) -> None:
         with self._lock:
             self._history.append(ModelCall(provider, model, ok, duration_ms, error))
@@ -182,6 +207,7 @@ class ModelRouter:
             "last_provider": self._last_provider,
             "last_model": self._last_model,
             "providers": self.available(),
+            "tokens": self.tokens(),
             "average_ms": int(sum(call.duration_ms for call in successful) / len(successful)) if successful else 0,
         }
 
