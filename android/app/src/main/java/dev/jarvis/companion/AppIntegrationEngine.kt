@@ -23,8 +23,13 @@ class AppIntegrationEngine(private val context: Context?) {
         val description: String,
         val requiredPermissions: List<String> = emptyList(),
         val needsAccessibility: Boolean = false,
-        /** Builds the intent for the action. Returns null when it is not possible. */
-        val build: (Context?, Map<String, String>) -> Intent?,
+        /**
+         * Builds the intent for the action.
+         *
+         * The package that is really installed is passed in, because the
+         * same application has a different package on different phones.
+         */
+        val build: (Context?, String, Map<String, String>) -> Intent?,
     )
 
     /** One supported application. */
@@ -35,8 +40,16 @@ class AppIntegrationEngine(private val context: Context?) {
         val actions: List<Action>,
         val unsupportedActions: List<String> = emptyList(),
         val website: String = "",
+        /**
+         * The packages this application may have. The first one that is
+         * installed is used, so the integration works on any phone.
+         */
+        val packageCandidates: List<String> = listOf(packageName),
     ) {
         fun action(id: String): Action? = actions.firstOrNull { it.id == id }
+
+        /** The identifier used in the action request. */
+        val id: String get() = packageName
     }
 
     /** The result of trying to run an action. */
@@ -74,6 +87,14 @@ class AppIntegrationEngine(private val context: Context?) {
         return candidates.firstOrNull { isInstalled(it.packageName) } ?: candidates.firstOrNull()
     }
 
+    /** The package of an integration that is really installed. */
+    fun installedPackage(integration: Integration): String? {
+        for (candidate in integration.packageCandidates) {
+            if (isInstalled(candidate)) return candidate
+        }
+        return null
+    }
+
     /** Run an action of an integration. */
     fun run(
         integration: Integration,
@@ -88,14 +109,13 @@ class AppIntegrationEngine(private val context: Context?) {
                 packageName = integration.packageName,
             )
 
-        if (!isInstalled(integration.packageName)) {
-            return Outcome(
+        val target = installedPackage(integration)
+            ?: return Outcome(
                 false,
                 "${integration.label} is not installed on this phone.",
                 actionId = actionId,
                 packageName = integration.packageName,
             )
-        }
 
         val owner = context
         val missing = if (owner == null) emptyList() else action.requiredPermissions.filter { permission ->
@@ -113,7 +133,7 @@ class AppIntegrationEngine(private val context: Context?) {
         }
 
         val intent = try {
-            action.build(context, arguments)
+            action.build(context, target, arguments)
         } catch (_: Exception) {
             null
         } ?: return Outcome(
@@ -124,10 +144,10 @@ class AppIntegrationEngine(private val context: Context?) {
         )
 
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        val target = owner
+        val starter = owner
             ?: return Outcome(false, "There is no phone to run the action on.", actionId, integration.packageName)
         return try {
-            target.startActivity(intent)
+            starter.startActivity(intent)
             Outcome(
                 true,
                 "Opened ${integration.label}.",
@@ -156,31 +176,31 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open WhatsApp",
-                ) { appContext, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send")).setPackage("com.whatsapp")
+                ) { _, target, _ ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send")).setPackage(target)
                 },
                 Action(
                     id = "prepare_message",
                     description = "Open a chat with a number and prepare a message",
-                ) { appContext, arguments ->
+                ) { _, target, arguments ->
                     val number = arguments["number"].orEmpty().filter { it.isDigit() }
                     val text = arguments["text"].orEmpty()
                     if (number.length !in 7..15) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("https://api.whatsapp.com/send?phone=$number&text=${Uri.encode(text)}"),
-                    ).setPackage("com.whatsapp")
+                    ).setPackage(target)
                 },
                 Action(
                     id = "open_chat",
                     description = "Open an existing chat with a number",
-                ) { appContext, arguments ->
+                ) { _, target, arguments ->
                     val number = arguments["number"].orEmpty().filter { it.isDigit() }
                     if (number.length !in 7..15) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("https://api.whatsapp.com/send?phone=$number"),
-                    ).setPackage("com.whatsapp")
+                    ).setPackage(target)
                 },
             ),
         ),
@@ -192,25 +212,26 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open WhatsApp Business",
-                ) { _, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send")).setPackage("com.whatsapp.w4b")
+                ) { _, target, _ ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send")).setPackage(target)
                 },
                 Action(
                     id = "prepare_message",
                     description = "Open a chat with a number and prepare a message",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val number = arguments["number"].orEmpty().filter { it.isDigit() }
                     val text = arguments["text"].orEmpty()
                     if (number.length !in 7..15) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("https://api.whatsapp.com/send?phone=$number&text=${Uri.encode(text)}"),
-                    ).setPackage("com.whatsapp.w4b")
+                    ).setPackage(target)
                 },
             ),
         ),
         Integration(
-            packageName = "com.android.dialer",
+            packageName = "com.android.phone",
+            packageCandidates = listOf("com.android.phone", "com.android.dialer", "com.google.android.dialer", "com.android.incallui"),
             label = "Phone",
             description = "Open the dialer and place a call.",
             unsupportedActions = listOf("read the call log"),
@@ -218,12 +239,12 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open the dialer",
-                ) { _, _ -> Intent(Intent.ACTION_DIAL) },
+                ) { _, target, _ -> Intent(Intent.ACTION_DIAL) },
                 Action(
                     id = "call",
                     description = "Place a call",
                     requiredPermissions = listOf("android.permission.CALL_PHONE"),
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val number = arguments["number"].orEmpty()
                     if (number.isBlank()) return@Action null
                     Intent(Intent.ACTION_CALL, Uri.parse("tel:$number"))
@@ -231,7 +252,8 @@ class AppIntegrationEngine(private val context: Context?) {
             ),
         ),
         Integration(
-            packageName = "com.android.messaging",
+            packageName = "com.google.android.apps.messaging",
+            packageCandidates = listOf("com.google.android.apps.messaging", "com.android.messaging", "com.samsung.android.messaging"),
             label = "Messages",
             description = "Open a conversation and prepare a text message.",
             unsupportedActions = listOf("send a message without confirmation"),
@@ -239,11 +261,11 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Messages",
-                ) { _, _ -> Intent(Intent.ACTION_MAIN).setPackage("com.android.messaging") },
+                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
                 Action(
                     id = "prepare_message",
                     description = "Prepare a message to a number",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val number = arguments["number"].orEmpty()
                     if (number.isBlank()) return@Action null
                     Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).apply {
@@ -263,13 +285,13 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Telegram",
-                ) { _, _ ->
+                ) { _, target, _ ->
                     Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve")).setPackage("org.telegram.messenger")
                 },
                 Action(
                     id = "prepare_message",
                     description = "Prepare a message to a username",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val user = arguments["name"].orEmpty().trim().removePrefix("@")
                     if (user.isBlank()) return@Action null
                     Intent(
@@ -288,13 +310,13 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Gmail",
-                ) { _, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://mail.google.com")).setPackage("com.google.android.gm")
+                ) { _, target, _ ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://mail.google.com")).setPackage(target)
                 },
                 Action(
                     id = "prepare_message",
                     description = "Prepare a message",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val subject = arguments["subject"].orEmpty()
                     val body = arguments["text"].orEmpty()
                     Intent(Intent.ACTION_SENDTO).apply {
@@ -315,30 +337,30 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Maps",
-                ) { _, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=0,0")).setPackage("com.google.android.apps.maps")
+                ) { _, target, _ ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=0,0")).setPackage(target)
                 },
                 Action(
                     id = "navigate",
                     description = "Navigate to a place",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val destination = arguments["destination"].orEmpty()
                     if (destination.isBlank()) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("google.navigation:q=${Uri.encode(destination)}"),
-                    ).setPackage("com.google.android.apps.maps")
+                    ).setPackage(target)
                 },
                 Action(
                     id = "search",
                     description = "Search for a place",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val query = arguments["query"].orEmpty()
                     if (query.isBlank()) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("geo:0,0?q=${Uri.encode(query)}"),
-                    ).setPackage("com.google.android.apps.maps")
+                    ).setPackage(target)
                 },
             ),
         ),
@@ -350,28 +372,28 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Chrome",
-                ) { _, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).setPackage("com.android.chrome")
+                ) { _, target, _ ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).setPackage(target)
                 },
                 Action(
                     id = "search",
                     description = "Search the web",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val query = arguments["query"].orEmpty()
                     if (query.isBlank()) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("https://www.google.com/search?q=${Uri.encode(query)}"),
-                    ).setPackage("com.android.chrome")
+                    ).setPackage(target)
                 },
                 Action(
                     id = "open_url",
                     description = "Open a page",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val url = arguments["url"].orEmpty()
                     if (url.isBlank()) return@Action null
                     val normalised = if (url.startsWith("http")) url else "https://$url"
-                    Intent(Intent.ACTION_VIEW, Uri.parse(normalised)).setPackage("com.android.chrome")
+                    Intent(Intent.ACTION_VIEW, Uri.parse(normalised)).setPackage(target)
                 },
             ),
         ),
@@ -383,24 +405,25 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open YouTube",
-                ) { _, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://m.youtube.com")).setPackage("com.google.android.youtube")
+                ) { _, target, _ ->
+                    Intent(Intent.ACTION_VIEW, Uri.parse("https://m.youtube.com")).setPackage(target)
                 },
                 Action(
                     id = "search",
                     description = "Search YouTube",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val query = arguments["query"].orEmpty()
                     if (query.isBlank()) return@Action null
                     Intent(
                         Intent.ACTION_VIEW,
                         Uri.parse("https://m.youtube.com/results?search_query=${Uri.encode(query)}"),
-                    ).setPackage("com.google.android.youtube")
+                    ).setPackage(target)
                 },
             ),
         ),
         Integration(
-            packageName = "com.android.calendar",
+            packageName = "com.google.android.calendar",
+            packageCandidates = listOf("com.google.android.calendar", "com.android.calendar"),
             label = "Calendar",
             description = "Open the calendar and create an event.",
             unsupportedActions = listOf("delete an event without confirmation"),
@@ -408,11 +431,11 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open the calendar",
-                ) { _, _ -> Intent(Intent.ACTION_MAIN).setPackage("com.android.calendar") },
+                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
                 Action(
                     id = "create_event",
                     description = "Create a calendar event",
-                ) { _, arguments ->
+                ) { _, target, arguments ->
                     val title = arguments["title"].orEmpty()
                     if (title.isBlank()) return@Action null
                     Intent(Intent.ACTION_INSERT).apply {
@@ -433,20 +456,21 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open the camera",
-                ) { _, _ ->
+                ) { _, target, _ ->
                     Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
                 },
             ),
         ),
         Integration(
-            packageName = "com.google.android.projection.gearhead",
+            packageName = "com.google.android.apps.photos",
+            packageCandidates = listOf("com.google.android.apps.photos", "com.google.android.projection.gearhead", "com.vivo.gallery", "com.android.gallery3d", "com.mi.android.gallery"),
             label = "Gallery",
             description = "Open the photo gallery.",
             actions = listOf(
                 Action(
                     id = "open",
                     description = "Open the gallery",
-                ) { _, _ ->
+                ) { _, target, _ ->
                     Intent(Intent.ACTION_VIEW).setType("image/*")
                 },
             ),
@@ -459,7 +483,7 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Files",
-                ) { _, _ -> Intent(Intent.ACTION_MAIN).setPackage("com.android.documentsui") },
+                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
             ),
         ),
         Integration(
@@ -471,27 +495,27 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Settings",
-                ) { _, _ -> Intent(android.provider.Settings.ACTION_SETTINGS) },
+                ) { _, target, _ -> Intent(android.provider.Settings.ACTION_SETTINGS) },
                 Action(
                     id = "open_wifi",
                     description = "Open the Wi-Fi settings",
-                ) { _, _ -> Intent(android.provider.Settings.ACTION_WIFI_SETTINGS) },
+                ) { _, target, _ -> Intent(android.provider.Settings.ACTION_WIFI_SETTINGS) },
                 Action(
                     id = "open_bluetooth",
                     description = "Open the Bluetooth settings",
-                ) { _, _ -> Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) },
+                ) { _, target, _ -> Intent(android.provider.Settings.ACTION_BLUETOOTH_SETTINGS) },
                 Action(
                     id = "open_display",
                     description = "Open the display settings",
-                ) { _, _ -> Intent(android.provider.Settings.ACTION_DISPLAY_SETTINGS) },
+                ) { _, target, _ -> Intent(android.provider.Settings.ACTION_DISPLAY_SETTINGS) },
                 Action(
                     id = "open_sound",
                     description = "Open the sound settings",
-                ) { _, _ -> Intent(android.provider.Settings.ACTION_SOUND_SETTINGS) },
+                ) { _, target, _ -> Intent(android.provider.Settings.ACTION_SOUND_SETTINGS) },
                 Action(
                     id = "open_battery",
                     description = "Open the battery settings",
-                ) { _, _ -> Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS) },
+                ) { _, target, _ -> Intent(android.provider.Settings.ACTION_BATTERY_SAVER_SETTINGS) },
             ),
         ),
         Integration(
@@ -502,7 +526,7 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open the Play Store",
-                ) { _, _ -> Intent(Intent.ACTION_MAIN).setPackage("com.android.vending") },
+                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
             ),
         ),
     )

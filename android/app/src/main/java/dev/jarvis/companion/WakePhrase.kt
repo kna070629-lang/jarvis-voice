@@ -45,12 +45,18 @@ object WakePhrase {
     }
 
     private val confirmPatterns = listOf(
-        Regex("\\b(?:yes|yeah|yep|yup|confirm|confirmed|go ahead|proceed|do it|sure|please do)\\b"),
+        Regex(
+            "\\b(?:yes|yeah|yep|yup|confirm|confirmed|go ahead|go on|proceed|continue|" +
+                "do it|do that|sure|affirmative|please do|that is correct)\\b",
+        ),
         Regex("^\\s*(?:ok|okay)\\s*$"),
     )
 
     private val declinePatterns = listOf(
-        Regex("\\b(?:no|nope|cancel|never mind|nevermind|dont|do not|abort)\\b"),
+        Regex(
+            "\\b(?:no|nope|cancel|never mind|nevermind|dont|don t|do not|abort|stop|quit|" +
+                "forget it|not now|no thanks)\\b",
+        ),
     )
 
     /** True when the user agreed to carry out a sensitive action. */

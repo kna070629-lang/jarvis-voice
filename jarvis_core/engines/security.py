@@ -46,8 +46,6 @@ class SecurityEngine:
 
     #: Actions that always need the user to confirm.
     SENSITIVE_ACTIONS = {
-        "call",
-        "call_contact",
         "prepare_sms",
         "prepare_whatsapp",
         "open_chat",

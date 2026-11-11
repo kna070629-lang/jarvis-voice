@@ -27,6 +27,11 @@ data class ActionRequest(
     val args: Map<String, String> = emptyMap(),
     val requiresConfirmation: Boolean = false,
     val sensitive: Boolean = false,
+    /** The contract fields the backend sends, so the result can be reported. */
+    val requestId: String = "",
+    val target: String = "",
+    val permissionStatus: String = "unknown",
+    val executionStatus: String = "pending",
 ) {
     companion object {
         private val idPattern = Regex("^[A-Za-z0-9_-]{8,64}$")
@@ -60,6 +65,10 @@ data class ActionRequest(
                 args = args,
                 requiresConfirmation = value.optBoolean("requires_confirmation", false),
                 sensitive = value.optBoolean("sensitive", false),
+                requestId = value.optString("request_id", id),
+                target = value.optString("target"),
+                permissionStatus = value.optString("permission_status", "unknown"),
+                executionStatus = value.optString("execution_status", "pending"),
             )
         }
     }

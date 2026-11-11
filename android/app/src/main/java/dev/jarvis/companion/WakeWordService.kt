@@ -47,10 +47,16 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
     private var followUpFailures = 0
     private var pendingRequest: ActionRequest? = null
     private var pendingToken: String? = null
-    private var pendingConfirm: ActionRequest? = null
-    private var pendingConfirmToken: String? = null
+
+    /** The one place a pending action lives. */
+    private val confirmations = ConfirmationManager()
     private var restartDelayMs = MIN_RESTART_MS
     private var afterSpeech: (() -> Unit)? = null
+    private var lastResultText: String = ""
+    private var lastResultAt: Long = 0L
+
+    /** True while the assistant is speaking, so the microphone stays closed. */
+    private var speaking = false
     private var notificationManager: NotificationManager? = null
 
     private val restartRunnable = Runnable {
@@ -359,6 +365,18 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
             val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
             val confidence = results?.getFloatArray(SpeechRecognizer.CONFIDENCE_SCORES)?.firstOrNull() ?: -1f
             restartDelayMs = MIN_RESTART_MS
+
+            // The recogniser sometimes delivers the same final result twice.
+            // The same text within a short window is one utterance, so it is
+            // only handled once.
+            if (text.isNotBlank()) {
+                val now = System.currentTimeMillis()
+                if (text == lastResultText && now - lastResultAt < DUPLICATE_RESULT_WINDOW_MS) {
+                    return
+                }
+                lastResultText = text
+                lastResultAt = now
+            }
             if (mode == MODE_WAKE) {
                 if (WakePhrase.matches(text)) {
                     val trailing = WakePhrase.trailingCommand(text)
@@ -379,10 +397,13 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
                     speak("I did not catch that clearly. Say it again.") { continueConversation() }
                     return
                 }
-                val awaiting = pendingConfirm
+                val awaiting = confirmations.current()
                 when {
-                    WakePhrase.isStopCommand(text) -> endConversation(spoken = true)
-                    awaiting != null -> handleConfirmationReply(text, awaiting)
+                    WakePhrase.isStopCommand(text) -> {
+                        confirmations.clear("the user stopped the assistant")
+                        endConversation(spoken = true)
+                    }
+                    awaiting != null -> handleConfirmationReply(text)
                     text.isBlank() -> speak("I didn't catch that. Say it again.") { continueConversation() }
                     else -> processCommand(text)
                 }
@@ -460,8 +481,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         followUpFailures = 0
         pendingRequest = null
         pendingToken = null
-        pendingConfirm = null
-        pendingConfirmToken = null
+        confirmations.clear("the conversation ended")
         mode = MODE_WAKE
         handler.removeCallbacks(restartRunnable)
         if (spoken) {
@@ -481,32 +501,59 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         val result = dispatcher?.execute(request)
             ?: ActionResult(request.id, ActionStatus.FAILED, "The action dispatcher is unavailable.")
         if (result.status != ActionStatus.NEEDS_CONFIRMATION) {
+            // The action did not need a confirmation after all, so it is
+            // reported and the conversation continues.
+            confirmations.complete(request.id, result.message)
             speak(result.message) { continueConversation() }
             return
         }
-        pendingConfirm = request
-        pendingConfirmToken = result.confirmationToken
+        // The manager refuses to ask twice for the same action.
+        if (!confirmations.begin(request, result.confirmationToken.orEmpty(), question)) {
+            return
+        }
         speak("$question Say yes to continue, or no to cancel.") { continueConversation() }
     }
 
-    /** Runs or drops the action that was waiting for a spoken yes or no. */
-    private fun handleConfirmationReply(text: String, request: ActionRequest) {
-        val token = pendingConfirmToken
-        pendingConfirm = null
-        pendingConfirmToken = null
-        if (WakePhrase.isDecline(text)) {
-            speak("Cancelled.") { continueConversation() }
-            return
+    /**
+     * Runs or drops the action that was waiting for a spoken yes or no.
+     *
+     * The manager consumes the action, so a repeated yes cannot run it twice
+     * and a yes with nothing pending cannot replay an old action.
+     */
+    private fun handleConfirmationReply(text: String) {
+        when (confirmations.decide(text)) {
+            ConfirmationManager.Decision.DECLINED -> {
+                speak("Cancelled.") { continueConversation() }
+            }
+            ConfirmationManager.Decision.CONFIRMED -> {
+                val pending = confirmations.current() ?: confirmations.consumeConfirmed()
+                if (pending == null) {
+                    speak("There is nothing waiting for confirmation.") { continueConversation() }
+                    return
+                }
+                val result = dispatcher?.execute(pending.action, pending.token)
+                    ?: ActionResult(
+                        pending.action.id,
+                        ActionStatus.FAILED,
+                        "The action dispatcher is unavailable.",
+                    )
+                if (result.status == ActionStatus.SUCCEEDED) {
+                    confirmations.complete(pending.action.id, result.message)
+                } else {
+                    confirmations.fail(pending.action.id, result.message)
+                }
+                speak(result.message) { continueConversation() }
+            }
+            ConfirmationManager.Decision.EXPIRED -> {
+                speak("That confirmation timed out.") { continueConversation() }
+            }
+            ConfirmationManager.Decision.UNKNOWN -> {
+                speak("Say yes to continue, or no to cancel.") { continueConversation() }
+            }
+            ConfirmationManager.Decision.NONE -> {
+                speak("There is nothing waiting for confirmation.") { continueConversation() }
+            }
         }
-        if (!WakePhrase.isConfirmation(text)) {
-            pendingConfirm = request
-            pendingConfirmToken = token
-            speak("Say yes to continue, or no to cancel.") { continueConversation() }
-            return
-        }
-        val result = dispatcher?.execute(request, token)
-            ?: ActionResult(request.id, ActionStatus.FAILED, "The action dispatcher is unavailable.")
-        speak(result.message) { continueConversation() }
     }
 
     private fun confirmationQuestion(request: ActionRequest): String = when (request.type) {
@@ -530,8 +577,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         // involved, which keeps simple commands fast and works offline.
         when (val decision = engine.route(text)) {
             is IntentEngine.Result.Cancelled -> {
-                pendingConfirm = null
-                pendingConfirmToken = null
+                confirmations.clear("the user stopped the assistant")
                 speak("Stopped.") { returnToWake() }
             }
             is IntentEngine.Result.Handled -> {
@@ -598,6 +644,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         // arrives instead of waiting for the whole reply. The request has to
         // run off the main thread or Android refuses the network call.
         Thread {
+            publish("Understanding the request")
             BackendClient.chatStream(
                 context = this,
                 token = token,
@@ -663,9 +710,20 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         else -> "That action needs confirmation"
     }
 
+    /**
+     * Speaks and keeps the microphone closed until the utterance is over.
+     *
+     * The recogniser listening while JARVIS talks is how it hears itself and
+     * starts a loop.
+     */
     private fun speak(text: String, next: (() -> Unit)? = null) {
         if (stopped) return
         afterSpeech = next
+        speaking = true
+        try {
+            recognizer?.cancel()
+        } catch (_: Exception) {
+        }
         // A custom voice recording replaces text-to-speech when the user picked one.
         val customVoice = VoicePreferences.customVoiceUri(this)
         if (customVoice != null) {
@@ -751,6 +809,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
             }
 
             override fun onDone(utteranceId: String?) {
+                speaking = false
                 val action = afterSpeech
                 afterSpeech = null
                 action?.invoke()
@@ -760,6 +819,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
             override fun onError(utteranceId: String?) = onError(utteranceId, TextToSpeech.ERROR)
 
             override fun onError(utteranceId: String?, errorCode: Int) {
+                speaking = false
                 val action = afterSpeech
                 afterSpeech = null
                 publish("TextToSpeech error $errorCode")
@@ -842,6 +902,9 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         private val DATE_PATTERN = Regex(
             "^\\s*(?:what(?:'s| is)?\\s+(?:the\\s+)?)?(?:current\\s+)?(?:date|today(?:'s)?\\s+date)(?:\\s+is\\s+it)?[?.! ]*$",
         )
+
+        /** The same final result inside this window is one utterance. */
+        private const val DUPLICATE_RESULT_WINDOW_MS = 1200L
 
         /** Results below this confidence are treated as not understood. */
         private const val LOW_CONFIDENCE_LIMIT = 0.45f

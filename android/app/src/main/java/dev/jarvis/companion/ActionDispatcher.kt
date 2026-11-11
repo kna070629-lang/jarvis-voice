@@ -218,8 +218,16 @@ class ActionDispatcher(private val context: Context) {
                     "Permission needed: Contacts. Allow JARVIS to read contacts so I can find people by name.",
                 )
             }
-            val contact = contacts.resolve(name)
-                ?: return failure(request, "I could not find a contact called $name.")
+            val resolution = contacts.resolve(name, ContactAliases.load(context))
+            val contact = resolution.match?.contact
+                ?: return failure(
+                    request,
+                    if (resolution.status == ContactResolver.Status.AMBIGUOUS) {
+                        "I found more than one contact called $name."
+                    } else {
+                        "I could not find a contact called $name."
+                    },
+                )
             arguments["number"] = contact.primary.orEmpty()
             arguments["name"] = contact.name
         }
@@ -241,25 +249,61 @@ class ActionDispatcher(private val context: Context) {
     private fun callContact(request: ActionRequest): ActionResult {
         val name = request.args["name"].orEmpty().trim()
         if (name.isEmpty()) return failure(request, "I need a name to call.")
-        if (!contacts.hasPermission()) {
-            return ActionResult(
+
+        // The contacts are read again, because a contact may have been added
+        // since the list was last cached.
+        contacts.refresh()
+        val resolution = contacts.resolve(name, ContactAliases.load(context))
+        when (resolution.status) {
+            ContactResolver.Status.NO_PERMISSION -> return ActionResult(
                 request.id,
                 ActionStatus.PERMISSION_REQUIRED,
                 "Permission needed: Contacts. Allow JARVIS to read contacts so I can call people by name.",
             )
+            ContactResolver.Status.NOT_FOUND -> return failure(
+                request,
+                "I could not find a contact called $name. Check the name or add an alias for this person.",
+            )
+            ContactResolver.Status.AMBIGUOUS -> {
+                // The user is asked once, with the choices, rather than JARVIS
+                // picking one for them.
+                val choices = resolution.candidates.joinToString(", ") { it.contact.name }
+                return ActionResult(
+                    request.id,
+                    ActionStatus.NEEDS_CONFIRMATION,
+                    "I found more than one contact called $name: $choices. Which one should I call?",
+                )
+            }
+            ContactResolver.Status.RESOLVED -> Unit
         }
-        val contact = contacts.resolve(name)
-            ?: return failure(request, "I could not find a contact called $name.")
+        val contact = resolution.match?.contact
+            ?: return failure(request, "I could not resolve $name.")
         val number = contact.primary
-            ?: return failure(request, "$name has no phone number on this device.")
+            ?: return failure(request, "${contact.name} has no phone number on this device.")
+
+        // The call is placed when the phone permission is there. Otherwise the
+        // dialer opens with the number, and the message says exactly that, so
+        // JARVIS never claims a call it did not place.
         val canCallDirectly = context.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
-        if (canCallDirectly && safeStart(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")))) {
-            return success(request, "Calling ${contact.name}.")
+        if (canCallDirectly) {
+            if (safeStart(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")))) {
+                return success(request, "Calling ${contact.name}.")
+            }
+            // Some devices refuse a direct call from the background, so the
+            // dialer is tried before giving up.
+            if (safeStart(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")))) {
+                return success(request, "I could not place the call directly, so the dialer is open with ${contact.name}.")
+            }
+            return failure(request, "Android would not open the dialer for ${contact.name}.")
         }
         if (safeStart(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number")))) {
-            return success(request, "Dialer opened with ${contact.name}. Press the call button to connect.")
+            return ActionResult(
+                request.id,
+                ActionStatus.PERMISSION_REQUIRED,
+                "The Phone permission is needed to call ${contact.name} directly. The dialer is open with the number; allow the permission to let JARVIS call.",
+            )
         }
-        return failure(request, "Android did not open the dialer.")
+        return failure(request, "Android did not open the dialer for ${contact.name}.")
     }
 
     /**
@@ -278,7 +322,8 @@ class ActionDispatcher(private val context: Context) {
                 "Permission needed: Contacts. Allow JARVIS to read contacts so I can open chats by name.",
             )
         }
-        val contact = contacts.resolve(name)
+        val resolution = contacts.resolve(name, ContactAliases.load(context))
+        val contact = resolution.match?.contact
             ?: return failure(request, "I could not find a contact called $name.")
         val number = contact.primary
             ?: return failure(request, "${contact.name} has no phone number on this device.")

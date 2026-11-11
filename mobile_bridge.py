@@ -81,7 +81,9 @@ ACTION_ARGUMENTS = {
     "set_calendar": ({"title"}, {"time"}),
 }
 NAVIGATION_ACTIONS = {"back", "home", "recents"}
-SENSITIVE_ACTIONS = {"call", "prepare_sms", "prepare_whatsapp", "read_notifications", "call_contact", "open_chat"}
+# A call is authorised by the spoken command itself. A message is not, because
+# it puts words in someone else's inbox.
+SENSITIVE_ACTIONS = {"prepare_sms", "prepare_whatsapp", "read_notifications", "open_chat"}
 TERMINAL_ACTION_STATUSES = {"succeeded", "failed", "cancelled", "permission_required", "duplicate"}
 TOKEN_PATH = Path.home() / ".config" / "jarvis" / "mobile.token"
 
@@ -268,7 +270,12 @@ def _safe_action_request(value) -> dict | None:
     """
     if not isinstance(value, dict):
         return None
-    if set(value) != {"action_id", "action", "args", "requires_confirmation", "sensitive"}:
+    required = {"action_id", "action", "args", "requires_confirmation", "sensitive"}
+    allowed = required | {
+        "request_id", "action_type", "arguments", "target", "permissions",
+        "permission_status", "execution_status", "result", "error", "timestamp",
+    }
+    if not required.issubset(set(value)) or not set(value).issubset(allowed):
         return None
     action_id = value.get("action_id")
     action = value.get("action")
@@ -314,12 +321,36 @@ def _safe_action_request(value) -> dict | None:
             return None
     if action == "accessibility" and clean_args.get("navigation") not in NAVIGATION_ACTIONS:
         return None
+    # The contract the Android companion reads. The companion is the only
+    # thing that executes an action, so the state here says what has not
+    # happened yet.
+    request_id = str(value.get("request_id") or action_id)
+    target = str(value.get("target") or "")
+    if not target:
+        target = clean_args.get("name") or clean_args.get("package") or clean_args.get("number") or ""
+    permissions = value.get("permissions")
+    if not isinstance(permissions, list):
+        permissions = []
+    permission_status = str(value.get("permission_status") or "unknown")
+    execution_status = str(value.get("execution_status") or "pending")
+    if execution_status not in ("pending", "executing"):
+        execution_status = "pending"
     return {
         "action_id": action_id,
+        "request_id": request_id,
         "action": action,
+        "action_type": action,
         "args": clean_args,
+        "arguments": clean_args,
+        "target": target,
+        "permissions": [str(item) for item in permissions][:16],
+        "permission_status": permission_status,
         "requires_confirmation": confirmation,
+        "execution_status": execution_status,
+        "result": str(value.get("result") or ""),
+        "error": str(value.get("error") or ""),
         "sensitive": sensitive,
+        "timestamp": float(value.get("timestamp") or time.time()),
     }
 
 

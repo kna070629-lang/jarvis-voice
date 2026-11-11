@@ -282,18 +282,36 @@ class MobileBridgeTests(unittest.TestCase):
         caught.exception.close()
 
     def test_planner_cannot_downgrade_sensitive_action_confirmation(self):
+        # A message is sensitive, so the planner cannot turn the confirmation
+        # off. A call is not sensitive, because the spoken command is the
+        # authorisation for it.
         self.server.action_planner = lambda text: {
             "action_id": "d" * 32,
-            "action": "call",
-            "args": {"number": "14155550199"},
+            "action": "prepare_whatsapp",
+            "args": {"number": "14155550199", "text": "hi"},
             "requires_confirmation": False,
             "sensitive": False,
-        } if text.casefold().startswith("call") else None
-        body = {"action": "chat", "request_id": "request_call_1", "text": "call +1 415 555 0199"}
+        } if text.casefold().startswith("send") else None
+        body = {"action": "chat", "request_id": "request_call_1", "text": "send a message"}
 
         payload = json.loads(self.request("/v1/command", body, "t" * 43).read())
         self.assertNotIn("action_request", payload)
-        self.assertEqual(["call +1 415 555 0199"], self.calls)
+        self.assertEqual(["send a message"], self.calls)
+
+    def test_a_call_is_not_asked_to_confirm_again(self):
+        self.server.action_planner = lambda text: {
+            "action_id": "e" * 32,
+            "action": "call_contact",
+            "args": {"name": "prakash"},
+            "requires_confirmation": False,
+            "sensitive": False,
+        } if text.casefold().startswith("call") else None
+        body = {"action": "chat", "request_id": "request_call_2", "text": "call prakash"}
+
+        payload = json.loads(self.request("/v1/command", body, "t" * 43).read())
+        self.assertIn("action_request", payload)
+        self.assertEqual("call_contact", payload["action_request"]["action"])
+        self.assertFalse(payload["action_request"]["requires_confirmation"])
 
     def test_action_result_rejects_invalid_status_and_identifier(self):
         invalid = {

@@ -122,6 +122,26 @@ class IntentEngine(
     )
 
     /**
+     * An explicit request to call a person by name.
+     *
+     * This tier is deliberately local. A request to call someone must never
+     * wait for a model, because the model may answer with text instead of an
+     * action and the call would never happen.
+     */
+    private val contactCallIntents: List<AppIntent> = listOf(
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:call|phone|dial|ring)\\s+(?:my\\s+)?(.+?)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = null,
+            actionId = "call_contact",
+            arguments = mapOf("name" to { match -> match.groupValues[1].trim() }),
+            packageFor = { null },
+        ),
+    )
+
+    /**
      * Natural commands for the supported applications.
      *
      * Each one names the application, the action of the integration and the
@@ -421,7 +441,7 @@ class IntentEngine(
             )
         }
 
-        // Tier 1b: device actions that run without the model.
+        // Tier 1d: device actions that run without the model.
         for (intent in deviceIntents) {
             val match = intent.pattern.matchEntire(text) ?: continue
             val args = mutableMapOf<String, String>()
@@ -454,6 +474,26 @@ class IntentEngine(
                 latencyMs = elapsedMs(started),
                 plugin = action,
                 arguments = arguments,
+            )
+        }
+
+        // Tier 2b: an explicit request to call a person by name. This runs
+        // after the local plugins, so "phone info" stays a device question,
+        // and it never reaches the model.
+        for (intent in contactCallIntents) {
+            val match = intent.pattern.matchEntire(text) ?: continue
+            val name = intent.arguments["name"]?.invoke(match)?.trim().orEmpty()
+            if (name.isEmpty()) continue
+            if (name.all { it.isDigit() || it in "+ ()-." }) continue
+            return Result.Handled(
+                tier = "contact-call",
+                latencyMs = elapsedMs(started),
+                request = ActionRequest.create(
+                    "call_contact",
+                    mapOf("name" to name),
+                    requiresConfirmation = false,
+                    sensitive = false,
+                ),
             )
         }
 

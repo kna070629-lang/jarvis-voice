@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import time
 
 
 MAX_ARG_CHARS = 240
@@ -147,12 +148,30 @@ def _clean_app_name(value: str) -> str:
 
 
 def _request(action: str, args: dict[str, str], *, confirmation: bool = False, sensitive: bool = False) -> dict:
+    """Build a device action in the shared contract.
+
+    The Android companion is the only thing that executes an action, so the
+    contract states the target, the arguments, whether a confirmation is
+    needed and what has not happened yet.
+    """
+    action_id = secrets.token_hex(16)
+    target = args.get("name") or args.get("package") or args.get("number") or ""
     return {
-        "action_id": secrets.token_hex(16),
+        "action_id": action_id,
+        "request_id": action_id,
         "action": action,
+        "action_type": action,
         "args": args,
+        "arguments": args,
+        "target": target,
+        "permissions": [],
+        "permission_status": "unknown",
         "requires_confirmation": bool(confirmation),
+        "execution_status": "pending",
+        "result": "",
+        "error": "",
         "sensitive": bool(sensitive),
+        "timestamp": time.time(),
     }
 
 
@@ -217,14 +236,18 @@ def interpret_device_action(text: str) -> dict | None:
     if call:
         number = _digits(call.group(1))
         if len(number) in range(7, 16):
-            return _request("call", {"number": number}, confirmation=True, sensitive=True)
+            # The spoken command is the authorisation for a call. Asking again
+            # is the repetitive confirmation the user complained about.
+            return _request("call", {"number": number}, confirmation=False, sensitive=False)
         return None
 
     call_name = _CALL_NAME.fullmatch(value)
     if call_name and not _QUESTION_CUE.search(value):
         name = _clean(call_name.group(1))
         if name and not _looks_like_number(name):
-            return _request("call_contact", {"name": name}, confirmation=True, sensitive=True)
+            # The spoken command is the authorisation for a call. Asking again
+            # is the repetitive confirmation the user complained about.
+            return _request("call_contact", {"name": name}, confirmation=False, sensitive=False)
         return None
 
     chat_name = _CHAT_NAME.fullmatch(value)

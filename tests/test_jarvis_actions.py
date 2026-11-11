@@ -25,17 +25,37 @@ class DeviceActionInterpretationTests(unittest.TestCase):
     def test_actions_have_ids_and_are_not_executable_text(self):
         action = interpret_device_action("open YouTube")
         self.assertRegex(action["action_id"], re.compile(r"^[a-f0-9]{32}$"))
-        self.assertEqual(
-            {"action_id", "action", "args", "requires_confirmation", "sensitive"},
-            set(action),
-        )
+        # The contract states the target, the arguments and what has not
+        # happened yet, so the companion can report the real result.
+        for field in (
+            "action_id", "request_id", "action", "action_type", "args",
+            "arguments", "target", "permissions", "permission_status",
+            "requires_confirmation", "execution_status", "result", "error",
+            "sensitive", "timestamp",
+        ):
+            self.assertIn(field, action)
+        self.assertEqual("pending", action["execution_status"])
+        self.assertEqual(action["action_id"], action["request_id"])
         self.assertFalse(action["requires_confirmation"])
 
-    def test_call_and_messages_require_confirmation(self):
+    def test_a_call_does_not_need_a_second_confirmation(self):
+        # The spoken command is the authorisation for a call, so a second
+        # confirmation would be the repetitive prompt the user complained about.
+        for text in ("call 919876543210", "call prakash", "call home"):
+            action = interpret_device_action(text)
+            self.assertIsNotNone(action, text)
+            self.assertFalse(action["requires_confirmation"], text)
+
+    def test_messages_still_require_one_confirmation(self):
+        action = interpret_device_action("send a whatsapp message to 919876543210 saying hi")
+        self.assertIsNotNone(action)
+        self.assertTrue(action["requires_confirmation"])
+
+    def test_messages_require_confirmation(self):
         call = interpret_device_action("call +1 415 555 0199")
         self.assertEqual("call", call["action"])
-        self.assertTrue(call["requires_confirmation"])
-        self.assertTrue(call["sensitive"])
+        # A call is authorised by the spoken command itself.
+        self.assertFalse(call["requires_confirmation"])
 
         sms = interpret_device_action("prepare SMS to +1 415 555 0199 saying I am on my way")
         self.assertEqual("prepare_sms", sms["action"])
@@ -88,7 +108,8 @@ class DeviceActionInterpretationTests(unittest.TestCase):
         action = interpret_device_action("call ramesh")
         self.assertEqual("call_contact", action["action"])
         self.assertEqual("ramesh", action["args"]["name"])
-        self.assertTrue(action["requires_confirmation"])
+        # The command is the authorisation, so no second confirmation.
+        self.assertFalse(action["requires_confirmation"])
 
     def test_a_question_about_a_person_is_not_a_call(self):
         self.assertIsNone(interpret_device_action("call ramesh about the invoice"))

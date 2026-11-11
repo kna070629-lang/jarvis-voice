@@ -39,15 +39,21 @@ class AppIntegrationTest {
     }
 
     @Test fun theIntegrationsCoverTheExpectedApplications() {
-        val packages = AppIntegrationEngine(null).all().map { it.packageName }
+        // The package of an application is different on different phones, so
+        // every family of applications is checked by its candidates.
+        val candidates = AppIntegrationEngine(null).all()
+            .flatMap { it.packageCandidates }
+            .toSet()
         for (expected in listOf(
-            "com.whatsapp", "com.android.dialer", "com.android.messaging",
+            "com.whatsapp", "com.android.phone", "com.android.dialer",
+            "com.google.android.apps.messaging", "com.android.messaging",
             "org.telegram.messenger", "com.google.android.gm",
             "com.google.android.apps.maps", "com.android.chrome",
-            "com.google.android.youtube", "com.android.calendar",
+            "com.google.android.youtube", "com.google.android.calendar",
             "com.android.camera2", "com.android.settings",
+            "com.google.android.apps.photos", "com.android.vending",
         )) {
-            assertTrue("$expected is missing", packages.contains(expected))
+            assertTrue("$expected is missing", candidates.contains(expected))
         }
     }
 
