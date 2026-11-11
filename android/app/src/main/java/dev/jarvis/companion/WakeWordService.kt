@@ -556,6 +556,46 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
+    /**
+     * Runs a device action.
+     *
+     * The assistant says what it is about to do first, and only then performs
+     * the action. That is how a caller expects a call to feel: the name is
+     * heard before the phone starts ringing.
+     */
+    private fun runAction(request: ActionRequest) {
+        val action = dispatcher
+            ?: run {
+                speak("The action dispatcher is unavailable.") { continueConversation() }
+                return
+            }
+        val announcement = action.announce(request)
+        if (announcement == null) {
+            val result = action.execute(request)
+            reportResult(request, result)
+            return
+        }
+        speak(announcement) {
+            val result = action.execute(request)
+            // A successful action was already announced, so only a failure is
+            // spoken again.
+            if (!result.succeeded) {
+                reportResult(request, result)
+            } else {
+                continueConversation()
+            }
+        }
+    }
+
+    /** Speaks the result of an action. */
+    private fun reportResult(request: ActionRequest, result: ActionResult) {
+        when (result.status) {
+            ActionStatus.AMBIGUOUS -> speak("I found more than one app matching that name. Open JARVIS to choose one.") { returnToWake() }
+            ActionStatus.NEEDS_CONFIRMATION -> speak("Confirmation is needed. Open JARVIS to review it.") { returnToWake() }
+            else -> speak(result.message) { continueConversation() }
+        }
+    }
+
     private fun confirmationQuestion(request: ActionRequest): String = when (request.type) {
         "call" -> "Shall I call ${request.args["number"].orEmpty()}?"
         "prepare_sms" -> "Shall I prepare the message for ${request.args["number"].orEmpty()}?"
@@ -591,13 +631,7 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
                         requestConfirmation(request, confirmationQuestion(request))
                         return
                     }
-                    val result = dispatcher?.execute(request)
-                        ?: ActionResult(request.id, ActionStatus.FAILED, "The action dispatcher is unavailable.")
-                    when (result.status) {
-                        ActionStatus.AMBIGUOUS -> speak("I found more than one app matching that name. Open JARVIS to choose one.") { returnToWake() }
-                        ActionStatus.NEEDS_CONFIRMATION -> speak("Confirmation is needed. Open JARVIS to review it.") { returnToWake() }
-                        else -> speak(result.message) { continueConversation() }
-                    }
+                    runAction(request)
                     return
                 }
                 val plugin = decision.plugin
@@ -658,17 +692,30 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
                         if (action.requiresConfirmation) {
                             requestConfirmation(action, confirmationQuestion(action))
                         } else {
-                            val result = dispatcher?.execute(action)
-                                ?: ActionResult(action.id, ActionStatus.FAILED, "The action dispatcher is unavailable.")
-                            if (result.succeeded) {
-                                io.execute {
-                                    try {
-                                        BackendClient.sendActionResult(this, token, result)
-                                    } catch (_: Exception) {
+                            // The action is announced first, then it runs.
+                            val announcement = dispatcher?.announce(action)
+                            val perform = {
+                                val result = dispatcher?.execute(action)
+                                    ?: ActionResult(action.id, ActionStatus.FAILED, "The action dispatcher is unavailable.")
+                                if (result.succeeded) {
+                                    io.execute {
+                                        try {
+                                            BackendClient.sendActionResult(this, token, result)
+                                        } catch (_: Exception) {
+                                        }
                                     }
                                 }
+                                if (announcement == null || !result.succeeded) {
+                                    speak(result.message) { continueConversation() }
+                                } else {
+                                    continueConversation()
+                                }
                             }
-                            speak(result.message) { continueConversation() }
+                            if (announcement == null) {
+                                perform()
+                            } else {
+                                speak(announcement) { perform() }
+                            }
                         }
                     }
                 },

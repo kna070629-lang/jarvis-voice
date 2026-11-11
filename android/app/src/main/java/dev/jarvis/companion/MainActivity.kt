@@ -541,7 +541,28 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     ) {
         voiceBusy = true
         waveform.setState(VoiceWaveformView.State.THINKING)
+
+        // The action is announced before it runs, so the user hears what is
+        // about to happen first.
+        val announcement = actionDispatcher.announce(request)
+        if (announcement != null && confirmationToken == null) {
+            addTurn("JARVIS", announcement)
+            speakResponse(announcement)
+            handler.postDelayed({
+                val result = actionDispatcher.execute(request, confirmationToken)
+                finishAction(result, request, reportToBackend)
+            }, 700)
+            return
+        }
         val result = actionDispatcher.execute(request, confirmationToken)
+        finishAction(result, request, reportToBackend)
+    }
+
+    private fun finishAction(
+        result: ActionResult,
+        request: ActionRequest,
+        reportToBackend: Boolean,
+    ) {
         when (result.status) {
             ActionStatus.NEEDS_CONFIRMATION -> {
                 voiceBusy = false

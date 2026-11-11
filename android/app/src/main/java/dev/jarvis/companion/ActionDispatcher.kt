@@ -244,6 +244,34 @@ class ActionDispatcher(private val context: Context) {
     }
 
     /**
+     * What JARVIS says before the action happens.
+     *
+     * The assistant announces the action first and only then performs it, so
+     * the user hears what is about to happen before the phone starts ringing.
+     * A contact is announced by name and never by the whole number.
+     */
+    fun announce(request: ActionRequest): String? {
+        // The resolved name is used, so an alias such as "home" is announced
+        // as the person it points at.
+        val spoken = request.args["name"].orEmpty().trim()
+        val resolved = if (spoken.isNotBlank()) resolveContact(spoken)?.name else null
+        return ActionAnnouncer.announce(request, resolved)
+    }
+
+
+    /** The contact a spoken name points at, with the number already normalised. */
+    private fun resolveContact(name: String): ContactResolver.Contact? {
+        contacts.refresh()
+        val resolution = contacts.resolve(name, ContactAliases.load(context))
+        val contact = resolution.match?.contact ?: return null
+        return contact.copy(
+            numbers = contact.numbers.map {
+                PhoneNumbers.normalise(it, PhoneNumbers.regionIso(context))
+            },
+        )
+    }
+
+    /**
      * Calls a person by the name that was spoken. The number comes from the
      * contacts on the device, so the user never has to say a number.
      */
@@ -293,7 +321,7 @@ class ActionDispatcher(private val context: Context) {
         val canCallDirectly = context.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
         if (canCallDirectly) {
             if (safeStart(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")))) {
-                return success(request, "Calling ${contact.name} on $number.")
+                return success(request, "Calling ${contact.name}.")
             }
             // Some devices refuse a direct call from the background, so the
             // dialer is tried before giving up.
@@ -306,7 +334,7 @@ class ActionDispatcher(private val context: Context) {
             return ActionResult(
                 request.id,
                 ActionStatus.PERMISSION_REQUIRED,
-                "The Phone permission is needed to call ${contact.name} directly. The dialer is open with $number; allow the permission to let JARVIS call.",
+                "The Phone permission is needed to call ${contact.name} directly. The dialer is open with the number; allow the permission to let JARVIS call.",
             )
         }
         return failure(request, "Android did not open the dialer for ${contact.name}.")
