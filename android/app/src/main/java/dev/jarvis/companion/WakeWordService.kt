@@ -50,6 +50,9 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
 
     /** The one place a pending action lives. */
     private val confirmations = ConfirmationManager()
+
+    /** The community JARVIS voice, with the built in voice as the fallback. */
+    private val piperVoice = PiperVoicePlayer(this)
     private var restartDelayMs = MIN_RESTART_MS
     private var afterSpeech: (() -> Unit)? = null
     private var lastResultText: String = ""
@@ -794,6 +797,29 @@ class WakeWordService : Service(), TextToSpeech.OnInitListener {
     }
 
     private fun speakWithEngine(text: String, next: (() -> Unit)?) {
+        // The community JARVIS voice is produced by the backend, which keeps
+        // the model warm. The built in engine is the fallback.
+        val token = TokenStore.load(this)
+        if (!token.isNullOrBlank() && piperVoice.isAvailable(this, token)) {
+            publish("Speaking")
+            piperVoice.speak(this, token, text) { ok ->
+                handler.post {
+                    if (!ok) {
+                        speakWithEngine(text)
+                        return@post
+                    }
+                    val action = afterSpeech
+                    afterSpeech = null
+                    action?.invoke()
+                }
+            }
+            return
+        }
+        speakWithEngine(text)
+    }
+
+    /** Speaks with the built in Android engine. */
+    private fun speakWithEngine(text: String) {
         val engine = tts
         if (!ttsReady || engine == null) {
             publish("Speaking (TTS unavailable)")

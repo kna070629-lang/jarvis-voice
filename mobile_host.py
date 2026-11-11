@@ -11,6 +11,7 @@ import time
 from pathlib import Path
 
 from jarvis_actions import interpret_device_action
+from jarvis_voice import VoiceClient, VoiceUnavailable
 from jarvis_config import load_settings
 from jarvis_search import WikipediaSearchProvider
 from jarvis_core import JarvisCore
@@ -85,6 +86,37 @@ def process_message_stream(text: str, device: dict | None = None, on_delta=None)
     except Exception:
         log.exception("JARVIS engine failed while streaming a request")
         return "JARVIS encountered a local processing error. No device action was taken. Please try again."
+
+
+VOICE = VoiceClient()
+
+
+def speak(text: str) -> bytes | None:
+    """Speak the text with the community JARVIS voice.
+
+    The voice server runs beside the backend and keeps the model warm, so the
+    speech is produced on the phone without a network. None means the voice is
+    not available and the companion should use its own voice.
+    """
+    if not text.strip():
+        return None
+    try:
+        return VOICE.synthesize(text)
+    except VoiceUnavailable as exc:
+        log.warning("The JARVIS voice is not available: %s", exc)
+        return None
+    except Exception:
+        log.exception("The JARVIS voice failed")
+        return None
+
+
+def voice_status() -> dict[str, object]:
+    """What the diagnostics screen shows about the voice."""
+    from jarvis_voice import install_status
+
+    status = install_status()
+    status["server_running"] = VOICE.available()
+    return status
 
 
 def provider_status() -> dict[str, object]:
@@ -174,6 +206,7 @@ def main() -> int:
         process_message_stream=process_message_stream,
         self_check=self_check,
         core=core(),
+        speak=speak,
     )
     print("JARVIS Python backend listening on 127.0.0.1:8765; press Ctrl-C to stop.", flush=True)
     print("Provider status: " + str(provider_status()), flush=True)

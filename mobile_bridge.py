@@ -144,13 +144,15 @@ class _BridgeServer(ThreadingHTTPServer):
                  action_planner: Callable[[str], dict | None] | None = None,
                  process_message_stream: Callable[..., object] | None = None,
                  self_check: Callable[[], dict] | None = None,
-                 core: object | None = None):
+                 core: object | None = None,
+                 speak: Callable[[str], bytes | None] | None = None):
         super().__init__((HOST, port), _BridgeHandler)
         self.token = token
         self.process_message = process_message
         self.process_message_stream = process_message_stream
         self.self_check = self_check
         self.core = core
+        self.speak = speak
         self._message_accepts_device = _accepts_device(process_message)
         self.status_provider = status_provider
         self.action_planner = action_planner
@@ -575,6 +577,44 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         self._send(404, {"error": "not_found"})
 
     def do_POST(self) -> None:
+        if self.path == "/v1/tts":
+            auth = self.headers.get("Authorization", "")
+            expected = "Bearer " + self.server.token
+            if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+                self._send(401, {"error": "unauthorized"})
+                return
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            if length < 1 or length > 4000:
+                self._send(400, {"error": "invalid_length"})
+                return
+            raw = self.rfile.read(length)
+            try:
+                request = json.loads(raw.decode("utf-8"))
+                text = str(request.get("text") or "")
+            except Exception:
+                self._send(400, {"error": "invalid_json"})
+                return
+            if not text.strip():
+                self._send(400, {"error": "empty_text"})
+                return
+            speaker = getattr(self.server, "speak", None)
+            data = speaker(text) if callable(speaker) else None
+            if not data:
+                self._send(503, {"error": "voice_unavailable"})
+                return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+            finally:
+                self.close_connection = True
+            return
+
         if self.path != "/v1/command":
             self._send(404, {"error": "not_found"})
             return
@@ -848,11 +888,12 @@ def create_server(
     process_message_stream: Callable[..., object] | None = None,
     self_check: Callable[[], dict] | None = None,
     core: object | None = None,
+    speak: Callable[[str], bytes | None] | None = None,
 ) -> _BridgeServer:
     """Create the bridge without starting its serving thread (also useful in tests)."""
     return _BridgeServer(
         token or load_or_create_token(), process_message, port, status_provider, action_planner,
-        process_message_stream, self_check, core,
+        process_message_stream, self_check, core, speak,
     )
 
 
