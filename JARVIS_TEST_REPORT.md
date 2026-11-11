@@ -6,8 +6,8 @@ The results that were actually produced. Nothing here is a target.
 
 | Suite | Command | Result |
 |---|---|---|
-| Android unit tests | `./gradlew :app:testDebugUnitTest` | **54 passed, 0 failed** |
-| Backend tests | `python3 -m pytest tests/ -q` | **151 passed, 0 failed** |
+| Android unit tests | `./gradlew :app:testDebugUnitTest` | **79 passed, 0 failed** |
+| Backend tests | `python3 -m pytest tests/ -q` | **154 passed, 0 failed** |
 | Android compile | `./gradlew :app:compileDebugKotlin` | BUILD SUCCESSFUL |
 | Clean build and package | `./gradlew clean :app:testDebugUnitTest :app:assembleDebug` | BUILD SUCCESSFUL |
 | Workflow | GitHub Actions, `Android debug APK` | success on every commit since 2026-11-10 |
@@ -106,7 +106,39 @@ A service is never shown as connected without a real check behind it.
 | The APK is signed | `apksigner verify` passed, the v2 scheme |
 | The checksum | see the delivery note |
 
-## 8. What was not tested here
+## 8. The action execution repair
+
+The commands were checked against the running backend on the phone.
+
+| Command | Result |
+|---|---|
+| "call Prakash" | the `call_contact` action, target Prakash, no second confirmation |
+| "call home" | the `call_contact` action, target home |
+| "call my father" | the `call_contact` action, target father |
+| "call 919876543210" | the `call` action, target 919876543210 |
+| "send a WhatsApp message to 919876543210 saying hi" | the `prepare_whatsapp` action, one confirmation |
+| "open WhatsApp" | the `open_app` action |
+| "open Telegram" | the `open_app` action |
+| "open YouTube" | the `open_app` action |
+| "open Chrome" | the `open_app` action |
+| "open settings" | the `open_settings` action |
+| "read notifications" | the `read_notifications` action, one confirmation |
+| "turn on the flashlight" | the `toggle_flashlight` action |
+| "volume up" | the `set_volume` action |
+
+The intents the app fires were checked on the device. All of them resolve:
+`tel:`, `smsto:`, the WhatsApp send link, the Maps geo link, the Chrome search
+link and the YouTube search link.
+
+The package visibility was checked as well. The manifest now declares twenty
+five packages, so the applications the integration engine opens are visible to
+the app. Before that only two were declared, so on Android 11 and later an
+installed application looked like it was missing.
+
+The access control still holds. A request without a token and a request with
+a wrong token both return HTTP 401.
+
+## 9. What was not tested here
 
 * The microphone, the recognition and the speech need the phone in a real
   room, so they are on the diagnostics screen for a person to run.
