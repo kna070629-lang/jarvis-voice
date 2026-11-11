@@ -97,6 +97,7 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     private var wakeRequested = false
     private var updatingWakeToggle = false
     private val actionDispatcher by lazy { ActionDispatcher(this) }
+    private val resolver by lazy { AppResolver(this) }
 
     /** Feeds the live microphone level into the core display. */
     private val waveformTick = object : android.os.Handler(android.os.Looper.getMainLooper()) {
@@ -431,6 +432,10 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         )
         appSpinner = spinner(page, listOf("Loading installed apps…"))
         appsStatus = text(page, "Launchable apps have not been loaded.", 12, muted, false, 6)
+        button(page, "Refresh the app directory", false) {
+            resolver.refresh()
+            refreshApps()
+        }
         button(page, "Open selected app", false) { openSelectedApp() }
         button(page, "Refresh launchable apps", false) { refreshApps() }
 
@@ -821,15 +826,19 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
     }
 
     private fun refreshApps() {
-        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-        discoveredApps = packageManager.queryIntentActivities(launcher, 0)
-            .mapNotNull { info ->
-                val label = info.loadLabel(packageManager)?.toString()?.trim().orEmpty()
-                if (label.isBlank()) null else LaunchableApp(label, info.activityInfo.packageName)
-            }
-            .distinctBy { it.packageName }
+        // The shared resolver builds the directory, so the picker and the
+        // voice routing always agree about what is installed.
+        discoveredApps = resolver.launchableApps()
+            .map { LaunchableApp(it.label, it.packageName) }
             .sortedBy { it.label.lowercase() }
-        val labels = discoveredApps.map { it.label }.ifEmpty { listOf("No launchable apps visible") }
+        val labels = discoveredApps.map { entry ->
+            val level = AppIntegrationRegistry.capability(entry.packageName)?.level
+            if (level == null || level == SupportLevel.NOT_TESTED) {
+                entry.label
+            } else {
+                "${entry.label}  ·  ${level.name.lowercase().replace('_', ' ')}"
+            }
+        }.ifEmpty { listOf("No launchable apps visible") }
         appSpinner.adapter = object : ArrayAdapter<String>(
             this,
             android.R.layout.simple_spinner_item,

@@ -22,6 +22,7 @@ class ActionDispatcher(private val context: Context) {
     private val resolver = AppResolver(context)
     private val contacts = ContactResolver(context)
     private val integrations = AppIntegrationEngine(context)
+    private val screenshots = ScreenshotManager(context)
     private val ledger = ActionLedger()
 
     /** Whether the flashlight is currently lit, so it can be toggled. */
@@ -93,6 +94,7 @@ class ActionDispatcher(private val context: Context) {
             "accessibility" -> accessibility(request)
             "call_contact" -> callContact(request)
             "app_action" -> appAction(request)
+            "screenshot" -> screenshot(request)
             "open_chat" -> openChat(request)
             "click_text" -> clickText(request)
             "toggle_flashlight" -> toggleFlashlight(request)
@@ -270,6 +272,40 @@ class ActionDispatcher(private val context: Context) {
             },
         )
     }
+
+    /**
+     * Takes a screenshot when the user asks for one.
+     *
+     * The screen capture permission is needed, so the request is reported
+     * honestly when it has not been given.
+     */
+    private fun screenshot(request: ActionRequest): ActionResult {
+        if (!screenshots.isGranted) {
+            return ActionResult(
+                request.id,
+                ActionStatus.PERMISSION_REQUIRED,
+                "Allow the screen capture permission and I can take a screenshot.",
+            )
+        }
+        val activity = activityRef?.get()
+            ?: return failure(request, "The screen capture needs the JARVIS window open.")
+        screenshots.capture { result ->
+            if (result.ok) {
+                lastScreenshot = result.path
+                android.widget.Toast.makeText(activity, "Screenshot taken", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+        return success(request, "Taking a screenshot.")
+    }
+
+    /** The path of the last screenshot that was taken. */
+    @Volatile
+    var lastScreenshot: String = ""
+        private set
+
+    /** The activity used for the system permission dialogs. */
+    @Volatile
+    var activityRef: java.lang.ref.WeakReference<android.app.Activity>? = null
 
     /**
      * Calls a person by the name that was spoken. The number comes from the

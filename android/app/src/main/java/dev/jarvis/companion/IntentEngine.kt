@@ -222,6 +222,44 @@ class IntentEngine(
     )
 
     /**
+     * The actions that the accessibility service performs on the phone.
+     *
+     * They are local, so they never cost a round trip to the model.
+     */
+    private val accessibilityIntents: List<AppIntent> = listOf(
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:go\\s+)?back(?:\\s+to\\s+the\\s+previous\\s+screen)?\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = null,
+            actionId = "accessibility",
+            arguments = mapOf("navigation" to { "back" }),
+            packageFor = { null },
+        ),
+        AppIntent(
+            pattern = Regex(
+                "^\\s*scroll\\s+(down|up)\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = null,
+            actionId = "accessibility",
+            arguments = mapOf("navigation" to { match -> match.groupValues[1] }),
+            packageFor = { null },
+        ),
+        AppIntent(
+            pattern = Regex(
+                "^\\s*(?:take|grab|get)\\s+(?:a\\s+)?screenshot\\s*(?:of\\s+(?:the\\s+)?screen)?\\s*[.!?]*$",
+                RegexOption.IGNORE_CASE,
+            ),
+            packageName = null,
+            actionId = "screenshot",
+            arguments = emptyMap(),
+            packageFor = { null },
+        ),
+    )
+
+    /**
      * Device actions that are understood on the phone. The action dispatcher
      * already knows how to run them, so the model is never involved.
      */
@@ -474,6 +512,26 @@ class IntentEngine(
                 latencyMs = elapsedMs(started),
                 plugin = action,
                 arguments = arguments,
+            )
+        }
+
+        // Tier 2a: the actions the accessibility service performs.
+        for (intent in accessibilityIntents) {
+            val match = intent.pattern.matchEntire(text) ?: continue
+            val args = mutableMapOf<String, String>()
+            for ((key, extractor) in intent.arguments) {
+                extractor(match)?.let { args[key] = it }
+            }
+            val type = intent.actionId
+            return Result.Handled(
+                tier = "accessibility",
+                latencyMs = elapsedMs(started),
+                request = ActionRequest.create(
+                    type,
+                    args,
+                    requiresConfirmation = false,
+                    sensitive = false,
+                ),
             )
         }
 
