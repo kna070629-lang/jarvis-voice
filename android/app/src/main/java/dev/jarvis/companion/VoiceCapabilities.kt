@@ -59,7 +59,8 @@ object VoiceCapabilities {
         val manager = context.packageManager
         val intent = Intent(RecognitionService.SERVICE_INTERFACE)
         val services = try {
-            manager.queryIntentServices(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY)
+            // No filter, for the same reason as the application discovery.
+            manager.queryIntentServices(intent, 0)
         } catch (_: Exception) {
             emptyList()
         }

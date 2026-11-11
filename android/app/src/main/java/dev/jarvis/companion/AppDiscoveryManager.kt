@@ -2,10 +2,8 @@ package dev.jarvis.companion
 
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
-import java.text.Normalizer
 import java.util.Locale
 
 /**
@@ -57,7 +55,11 @@ class AppDiscoveryManager(private val context: Context) {
         val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         @Suppress("DEPRECATION")
         val resolved = try {
-            manager.queryIntentActivities(launcher, PackageManager.MATCH_DEFAULT_ONLY)
+            // No filter may be used here. MATCH_DEFAULT_ONLY would only keep
+            // the activities that also declare CATEGORY_DEFAULT, and most
+            // launcher activities do not, so the directory came back empty
+            // and every application was reported as missing.
+            manager.queryIntentActivities(launcher, DISCOVERY_FLAGS)
         } catch (_: Exception) {
             emptyList()
         }
@@ -106,20 +108,22 @@ class AppDiscoveryManager(private val context: Context) {
      * with the spaces in odd places, and with a small mistake.
      */
     fun find(requested: String): Lookup {
-        val wanted = normalize(requested)
+        val wanted = AppNameMatcher.normalize(requested)
         if (wanted.isEmpty()) return Lookup.NotFound(requested)
 
         val entries = apps()
         // An exact match always wins.
         entries.firstOrNull { entry ->
-            entry.names.any { normalize(it) == wanted }
+            entry.names.any { AppNameMatcher.normalize(it) == wanted }
         }?.let { return Lookup.Found(it) }
 
         // A package identifier is unambiguous.
         entries.firstOrNull { it.packageName.equals(requested.trim(), ignoreCase = true) }
             ?.let { return Lookup.Found(it) }
 
-        val scored = entries.mapNotNull { entry -> score(wanted, entry)?.let { it to entry } }
+        val scored = entries.mapNotNull { entry ->
+            AppNameMatcher.score(wanted, entry.names)?.let { it to entry }
+        }
             .sortedWith(
                 compareByDescending<Pair<Int, Entry>> { it.first }.thenBy { it.second.label },
             )
@@ -127,68 +131,24 @@ class AppDiscoveryManager(private val context: Context) {
 
         if (scored.isEmpty()) return Lookup.NotFound(requested)
         val best = scored.first()
-        val close = scored.filter { score(wanted, it) != null && score(wanted, it)!! >= score(wanted, best)!! - 12 }
+        val bestScore = AppNameMatcher.score(wanted, best.names) ?: 0
+        val close = scored.filter { entry ->
+            val value = AppNameMatcher.score(wanted, entry.names) ?: return@filter false
+            value >= bestScore - 12
+        }
         if (close.size > 1) return Lookup.Ambiguous(close.take(6))
         return Lookup.Found(best)
     }
 
-    /** The score of one application against a spoken name, or null when it is not a candidate. */
-    private fun score(wanted: String, entry: Entry): Int? {
-        var best: Int? = null
-        for (name in entry.names) {
-            val candidate = normalize(name)
-            if (candidate.isEmpty()) continue
-            val value = when {
-                candidate == wanted -> 100
-                candidate.startsWith(wanted) -> 85
-                wanted.startsWith(candidate) -> 80
-                candidate.contains(wanted) -> 70
-                wanted.contains(candidate) -> 65
-                else -> {
-                    val distance = levenshtein(wanted, candidate)
-                    when {
-                        wanted.length >= 5 && distance <= 1 -> 60
-                        wanted.length >= 8 && distance <= 2 -> 50
-                        else -> {
-                            val words = wanted.split(' ').filter { it.isNotBlank() }
-                            if (words.size > 1 && words.all { word -> candidate.contains(word) }) 55 else 0
-                        }
-                    }
-                }
-            }
-            if (value > 0 && (best == null || value > best!!)) best = value
-        }
-        return best
-    }
-
-    /**
-     * Normalise a spoken name.
-     *
-     * The recogniser writes names in lower case and without punctuation, and
-     * people say "you tube" where the label says "YouTube".
-     */
-    private fun normalize(value: String): String {
-        val text = Normalizer.normalize(value.lowercase(Locale.ROOT), Normalizer.Form.NFD)
-            .replace(Regex("[^a-z0-9\\s]"), " ")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-        return text
-    }
-
-    private fun levenshtein(left: String, right: String): Int {
-        if (left == right) return 0
-        if (left.isEmpty()) return right.length
-        if (right.isEmpty()) return left.length
-        var previous = IntArray(right.length + 1) { it }
-        for (i in left.indices) {
-            val current = IntArray(right.length + 1)
-            current[0] = i + 1
-            for (j in right.indices) {
-                val cost = if (left[i] == right[j]) 0 else 1
-                current[j + 1] = minOf(current[j] + 1, previous[j + 1] + 1, previous[j] + cost)
-            }
-            previous = current
-        }
-        return previous[right.length]
+    companion object {
+        /**
+         * The flags used to list the applications.
+         *
+         * There is no filter here on purpose. MATCH_DEFAULT_ONLY would only
+         * keep the activities that also declare CATEGORY_DEFAULT, and most
+         * launcher activities do not, so the directory came back empty and
+         * every application was reported as missing.
+         */
+        const val DISCOVERY_FLAGS = 0
     }
 }

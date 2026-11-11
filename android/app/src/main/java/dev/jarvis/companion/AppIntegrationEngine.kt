@@ -87,6 +87,23 @@ class AppIntegrationEngine(private val context: Context?) {
         return candidates.firstOrNull { isInstalled(it.packageName) } ?: candidates.firstOrNull()
     }
 
+    /**
+     * The intent that opens an application.
+     *
+     * The launch intent is used, because an application only has to publish
+     * one launcher activity. A web address is not guaranteed to be handled by
+     * that application, so forcing the package with a link is what stopped
+     * the applications from opening.
+     */
+    private fun launchIntent(target: String): Intent? {
+        val manager = context?.packageManager ?: return null
+        return try {
+            manager.getLaunchIntentForPackage(target)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     /** The package of an integration that is really installed. */
     fun installedPackage(integration: Integration): String? {
         for (candidate in integration.packageCandidates) {
@@ -166,7 +183,49 @@ class AppIntegrationEngine(private val context: Context?) {
     }
 
     // -- the integrations -------------------------------------------------
-    private fun buildIntegrations(): List<Integration> = listOf(
+    /**
+     * The integrations.
+     *
+     * The applications with a deep link are written out, because the action
+     * needs the link. Everything else is taken from the registry, so the list of
+     * applications lives in one place and the two cannot drift apart.
+     */
+    /**
+     * The integrations, one for every application in the registry.
+     *
+     * The registry is the single list of applications, so an application that
+     * is described there can always be opened by name. The applications with
+     * their own actions are added on top of that.
+     */
+    private fun buildIntegrations(): List<Integration> {
+        val specific = specificIntegrations()
+        val known = specific.map { it.packageName }.toSet()
+        val generic = AppIntegrationRegistry.CAPABILITIES
+            .filter { !known.contains(it.packageName) }
+            .map { capability ->
+                Integration(
+                    packageName = capability.packageName,
+                    label = capability.label,
+                    description = capability.description.ifEmpty { "Open ${capability.label}." },
+                    actions = listOf(
+                        Action(
+                            id = "open",
+                            description = "Open ${capability.label}",
+                        ) { _, target, _ -> launchIntent(target) },
+                    ),
+                    unsupportedActions = if (capability.restriction.isBlank()) {
+                        emptyList()
+                    } else {
+                        listOf(capability.restriction)
+                    },
+                    packageCandidates = listOf(capability.packageName),
+                )
+            }
+        return specific + generic
+    }
+
+    private fun specificIntegrations(): List<Integration> {
+        val deepLinks = listOf(
         Integration(
             packageName = "com.whatsapp",
             label = "WhatsApp",
@@ -177,7 +236,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open WhatsApp",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send")).setPackage(target)
+                    launchIntent(target)
                 },
                 Action(
                     id = "prepare_message",
@@ -213,7 +272,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open WhatsApp Business",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://api.whatsapp.com/send")).setPackage(target)
+                    launchIntent(target)
                 },
                 Action(
                     id = "prepare_message",
@@ -261,7 +320,7 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Messages",
-                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
+                ) { _, target, _ -> launchIntent(target) },
                 Action(
                     id = "prepare_message",
                     description = "Prepare a message to a number",
@@ -286,7 +345,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open Telegram",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("tg://resolve")).setPackage("org.telegram.messenger")
+                    launchIntent(target)
                 },
                 Action(
                     id = "prepare_message",
@@ -311,7 +370,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open Gmail",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://mail.google.com")).setPackage(target)
+                    launchIntent(target)
                 },
                 Action(
                     id = "prepare_message",
@@ -338,7 +397,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open Maps",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=0,0")).setPackage(target)
+                    launchIntent(target)
                 },
                 Action(
                     id = "navigate",
@@ -373,7 +432,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open Chrome",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com")).setPackage(target)
+                    launchIntent(target)
                 },
                 Action(
                     id = "search",
@@ -406,7 +465,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open YouTube",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW, Uri.parse("https://m.youtube.com")).setPackage(target)
+                    launchIntent(target)
                 },
                 Action(
                     id = "search",
@@ -431,7 +490,7 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open the calendar",
-                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
+                ) { _, target, _ -> launchIntent(target) },
                 Action(
                     id = "create_event",
                     description = "Create a calendar event",
@@ -457,7 +516,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open the camera",
                 ) { _, target, _ ->
-                    Intent(android.provider.MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+                    launchIntent(target)
                 },
             ),
         ),
@@ -471,7 +530,7 @@ class AppIntegrationEngine(private val context: Context?) {
                     id = "open",
                     description = "Open the gallery",
                 ) { _, target, _ ->
-                    Intent(Intent.ACTION_VIEW).setType("image/*")
+                    launchIntent(target)
                 },
             ),
         ),
@@ -483,7 +542,7 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open Files",
-                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
+                ) { _, target, _ -> launchIntent(target) },
             ),
         ),
         Integration(
@@ -526,10 +585,46 @@ class AppIntegrationEngine(private val context: Context?) {
                 Action(
                     id = "open",
                     description = "Open the Play Store",
-                ) { _, target, _ -> Intent(Intent.ACTION_MAIN).setPackage(target) },
+                ) { _, target, _ -> launchIntent(target) },
             ),
         ),
-    )
+        )
+        return deepLinks + registryIntegrations(deepLinks)
+    }
+
+    /**
+     * The integrations for the applications that only have to be opened.
+     *
+     * The registry says which applications exist, what they are called and
+     * whether they have a search, so an application that is not in the list of
+     * the engine is still opened by name.
+     */
+    private fun registryIntegrations(existing: List<Integration>): List<Integration> {
+        val covered = existing.map { it.packageName }.toSet()
+        return AppIntegrationRegistry.CAPABILITIES
+            .filter { it.packageName !in covered }
+            .map { capability ->
+                Integration(
+                    packageName = capability.packageName,
+                    label = capability.label,
+                    description = capability.description.ifEmpty {
+                        "Open ${capability.label}."
+                    },
+                    unsupportedActions = listOf("anything that was not verified"),
+                    actions = listOf(
+                        Action(
+                            id = "open",
+                            description = "Open ${capability.label}",
+                        ) { _, target, _ ->
+                            Intent(Intent.ACTION_MAIN)
+                                .addCategory(Intent.CATEGORY_LAUNCHER)
+                                .setPackage(target)
+                        },
+                    ),
+                    packageCandidates = listOf(capability.packageName),
+                )
+            }
+    }
 
     /** A short description of every integration, for the diagnostics screen. */
     fun describe(): List<String> = integrations.map { integration ->

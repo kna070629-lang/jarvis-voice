@@ -20,6 +20,8 @@ data class AppCapability(
     val textInput: Boolean = false,
     /** The official API, when the application offers one that is used. */
     val officialApi: String = "",
+    /** What the application does, for the interface and the report. */
+    val description: String = "",
     /** Why the application is restricted, when it is. */
     val restriction: String = "",
 )

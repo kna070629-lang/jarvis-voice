@@ -12,7 +12,7 @@ import android.content.pm.PackageManager
  * application. It never reports that an application opened when nothing was
  * actually started.
  */
-class AppLauncher(private val context: Context) {
+class AppLauncher(private val context: Context?) {
 
     /** The outcome of a launch. */
     data class Result(
@@ -28,7 +28,7 @@ class AppLauncher(private val context: Context) {
      * @return the outcome, which says which way it was opened.
      */
     fun launch(packageName: String, label: String = ""): Result {
-        val manager = context.packageManager
+        val manager = context?.packageManager ?: return Result(false, "There is no phone to open it on.", packageName)
         val launchIntent = try {
             manager.getLaunchIntentForPackage(packageName)
         } catch (_: Exception) {
@@ -57,7 +57,7 @@ class AppLauncher(private val context: Context) {
 
     /** The intent of an application that declares its own entry point. */
     private fun ownMainIntent(packageName: String): Intent? {
-        val manager = context.packageManager
+        val manager = context?.packageManager ?: return null
         return try {
             val info = manager.getApplicationInfo(packageName, 0)
             val className = info.className ?: return null
@@ -68,21 +68,26 @@ class AppLauncher(private val context: Context) {
     }
 
     /** True when the application is installed. */
-    fun isInstalled(packageName: String): Boolean = try {
-        context.packageManager.getApplicationInfo(packageName, 0)
-        true
-    } catch (_: Exception) {
-        false
+    fun isInstalled(packageName: String): Boolean {
+        val manager = context?.packageManager ?: return false
+        return try {
+            manager.getApplicationInfo(packageName, 0)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
-    private fun start(intent: Intent): Boolean = try {
-        context.startActivity(intent)
-        true
-    } catch (_: android.content.ActivityNotFoundException) {
-        false
-    } catch (_: SecurityException) {
-        false
-    } catch (_: Exception) {
-        false
+    private fun start(intent: Intent): Boolean {
+        return try {
+            context?.startActivity(intent) ?: return false
+            true
+        } catch (_: android.content.ActivityNotFoundException) {
+            false
+        } catch (_: SecurityException) {
+            false
+        } catch (_: Exception) {
+            false
+        }
     }
 }
