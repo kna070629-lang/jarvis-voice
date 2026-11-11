@@ -481,6 +481,26 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                 log.exception("The network view could not be built")
                 self._send(500, {"error": "network_unavailable"})
             return
+        if self.path == "/v1/node":
+            auth = self.headers.get("Authorization", "")
+            expected = "Bearer " + self.server.token
+            if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+                self._send(401, {"error": "unauthorized"})
+                return
+            core = self.server.core
+            if core is None:
+                self._send(404, {"error": "not_found"})
+                return
+            node_id = self.headers.get("X-Jarvis-Node", "")
+            if not node_id or len(node_id) > 64:
+                self._send(400, {"error": "invalid_node"})
+                return
+            try:
+                self._send(200, {"node": core.node_detail(node_id)})
+            except Exception:
+                log.exception("The node detail could not be built")
+                self._send(500, {"error": "node_unavailable"})
+            return
         if self.path == "/v1/selfcheck":
             self._send(404, {"error": "not_found"})
             return

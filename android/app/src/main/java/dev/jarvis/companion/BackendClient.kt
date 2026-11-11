@@ -135,6 +135,74 @@ object BackendClient {
         }
     }
 
+    /** Fetches the live topology of the network. */
+    fun fetchNetwork(context: Context, token: String): NetworkSnapshot? {
+        val body = try {
+            get(ENDPOINT.replace("/v1/command", "/v1/network"), token)
+        } catch (_: Exception) {
+            return null
+        }
+        val network = body.optJSONObject("network") ?: return null
+        return NetworkSnapshot.from(network)
+    }
+
+    /** Fetches the detail of one node, for the inspection panel. */
+    fun fetchNode(context: Context, token: String, nodeId: String): String? {
+        val body = try {
+            get(ENDPOINT.replace("/v1/command", "/v1/node"), token, nodeId)
+        } catch (_: Exception) {
+            return null
+        }
+        val node = body.optJSONObject("node") ?: return null
+        val lines = mutableListOf<String>()
+        lines.add(node.optString("name"))
+        lines.add("state: ${node.optString("status")}")
+        val detail = node.optString("detail")
+        if (detail.isNotBlank()) lines.add(detail)
+        lines.add("tasks completed: ${node.optInt("tasks_completed")}   failed: ${node.optInt("tasks_failed")}")
+        val capabilities = node.optJSONArray("capabilities")
+        if (capabilities != null && capabilities.length() > 0) {
+            lines.add("capabilities: " + (0 until capabilities.length()).joinToString(", ") {
+                capabilities.optString(it)
+            })
+        }
+        val error = node.optString("last_error")
+        if (error.isNotBlank()) lines.add("last error: $error")
+        val tasks = node.optJSONArray("recent_tasks")
+        if (tasks != null && tasks.length() > 0) {
+            lines.add("")
+            lines.add("recent tasks")
+            for (index in 0 until tasks.length()) {
+                val task = tasks.optJSONObject(index) ?: continue
+                val mark = if (task.optBoolean("ok")) "ok  " else "fail"
+                lines.add("  $mark  ${task.optString("summary")}")
+            }
+        }
+        return lines.joinToString("\n")
+    }
+
+    private fun get(url: String, token: String, nodeId: String? = null): JSONObject {
+        val connection = URL(url).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 5000
+            connection.readTimeout = 15000
+            connection.setRequestProperty("Authorization", "Bearer $token")
+            if (nodeId != null) {
+                connection.setRequestProperty("X-Jarvis-Node", nodeId)
+            }
+            val statusCode = connection.responseCode
+            val stream = if (statusCode in 200..299) connection.inputStream else connection.errorStream
+            val payload = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (statusCode !in 200..299) {
+                throw IllegalStateException("the backend returned HTTP $statusCode")
+            }
+            return JSONObject(payload)
+        } finally {
+            connection.disconnect()
+        }
+    }
+
     fun sendActionResult(context: Context, token: String, result: ActionResult): BackendReply {
         val body = JSONObject()
             .put("action", "action_result")

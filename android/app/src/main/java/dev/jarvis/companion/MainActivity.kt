@@ -347,6 +347,24 @@ class MainActivity : Activity(), TextToSpeech.OnInitListener {
         button(page, "Choose custom voice file", false) { pickCustomVoice() }
         button(page, "Clear custom voice file", false) { clearCustomVoice() }
 
+        section(page, "NEURAL NETWORK")
+        text(
+            page,
+            "The live view of the JARVIS architecture: the central core, the six inner engines " +
+                "and the six outer clusters, with the connections that carried real traffic.",
+            12,
+            muted,
+            false,
+            8,
+        )
+        button(page, "Open the live network", false) {
+            try {
+                startActivity(Intent(this, NetworkActivity::class.java))
+            } catch (_: Exception) {
+                Toast.makeText(this, "The network view could not be opened", Toast.LENGTH_SHORT).show()
+            }
+        }
+
         section(page, "LOCAL CAPABILITIES")
         text(
             page,
