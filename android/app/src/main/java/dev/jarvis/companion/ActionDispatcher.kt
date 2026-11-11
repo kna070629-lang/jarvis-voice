@@ -160,8 +160,9 @@ class ActionDispatcher(private val context: Context) {
     }
 
     private fun placeCall(request: ActionRequest): ActionResult {
-        val number = request.args["number"].orEmpty()
-        if (number.length !in 7..15) return failure(request, "I need a valid phone number before calling.")
+        val spoken = request.args["number"].orEmpty()
+        val number = PhoneNumbers.normalise(spoken, PhoneNumbers.regionIso(context))
+        if (!PhoneNumbers.isDialable(number)) return failure(request, "I need a valid phone number before calling.")
         val canCallDirectly = context.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
         if (canCallDirectly && safeStart(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")))) {
             return success(request, "Calling $number.")
@@ -278,8 +279,13 @@ class ActionDispatcher(private val context: Context) {
         }
         val contact = resolution.match?.contact
             ?: return failure(request, "I could not resolve $name.")
-        val number = contact.primary
+        // The number is put into the international form, because a national
+        // number cannot be dialled and gives "number unavailable".
+        val number = contact.primary?.let { PhoneNumbers.normalise(it, PhoneNumbers.regionIso(context)) }
             ?: return failure(request, "${contact.name} has no phone number on this device.")
+        if (!PhoneNumbers.isDialable(number)) {
+            return failure(request, "The number saved for ${contact.name} cannot be dialled.")
+        }
 
         // The call is placed when the phone permission is there. Otherwise the
         // dialer opens with the number, and the message says exactly that, so
@@ -287,7 +293,7 @@ class ActionDispatcher(private val context: Context) {
         val canCallDirectly = context.checkSelfPermission(Manifest.permission.CALL_PHONE) == PackageManager.PERMISSION_GRANTED
         if (canCallDirectly) {
             if (safeStart(Intent(Intent.ACTION_CALL, Uri.parse("tel:$number")))) {
-                return success(request, "Calling ${contact.name}.")
+                return success(request, "Calling ${contact.name} on $number.")
             }
             // Some devices refuse a direct call from the background, so the
             // dialer is tried before giving up.
@@ -300,7 +306,7 @@ class ActionDispatcher(private val context: Context) {
             return ActionResult(
                 request.id,
                 ActionStatus.PERMISSION_REQUIRED,
-                "The Phone permission is needed to call ${contact.name} directly. The dialer is open with the number; allow the permission to let JARVIS call.",
+                "The Phone permission is needed to call ${contact.name} directly. The dialer is open with $number; allow the permission to let JARVIS call.",
             )
         }
         return failure(request, "Android did not open the dialer for ${contact.name}.")
@@ -325,7 +331,7 @@ class ActionDispatcher(private val context: Context) {
         val resolution = contacts.resolve(name, ContactAliases.load(context))
         val contact = resolution.match?.contact
             ?: return failure(request, "I could not find a contact called $name.")
-        val number = contact.primary
+        val number = contact.primary?.let { PhoneNumbers.normalise(it, PhoneNumbers.regionIso(context)) }
             ?: return failure(request, "${contact.name} has no phone number on this device.")
         val encoded = Uri.encode(body)
         val whatsapp = Uri.parse("https://api.whatsapp.com/send?phone=$number&text=$encoded")

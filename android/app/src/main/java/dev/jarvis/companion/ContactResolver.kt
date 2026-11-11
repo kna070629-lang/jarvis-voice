@@ -129,6 +129,7 @@ class ContactResolver(private val context: Context?) {
             cached?.let { return it }
         }
         val owner = context ?: return emptyList()
+        val region = PhoneNumbers.regionIso(owner)
         val contacts = LinkedHashMap<String, Contact>()
         try {
             // The nickname lives on the contact row, the numbers on the phone
@@ -177,6 +178,7 @@ class ContactResolver(private val context: Context?) {
             val phoneProjection = arrayOf(
                 ContactsContract.CommonDataKinds.Phone.CONTACT_ID,
                 ContactsContract.CommonDataKinds.Phone.NUMBER,
+                ContactsContract.CommonDataKinds.Phone.NORMALIZED_NUMBER,
                 ContactsContract.CommonDataKinds.Phone.IS_PRIMARY,
             )
             owner.contentResolver.query(
@@ -189,9 +191,15 @@ class ContactResolver(private val context: Context?) {
                 while (cursor.moveToNext()) {
                     val id = cursor.getString(0) ?: continue
                     val number = cursor.getString(1)?.trim().orEmpty()
+                    // The normalised column already has the country code when
+                    // the contact was saved with one.
+                    val fromProvider = cursor.getString(2)?.trim().orEmpty()
                     val existing = contacts[id] ?: continue
-                    val digits = number.filter { it.isDigit() }
-                    if (digits.length !in 7..15) continue
+                    val digits = PhoneNumbers.normalise(
+                        if (fromProvider.length >= 8) fromProvider else number,
+                        region,
+                    ).filter { it.isDigit() || it == '+' }
+                    if (digits.filter { it.isDigit() }.length !in 7..15) continue
                     contacts[id] = existing.copy(
                         numbers = (existing.numbers + digits).distinct(),
                     )
