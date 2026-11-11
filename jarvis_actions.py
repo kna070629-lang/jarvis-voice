@@ -83,6 +83,14 @@ _NAVIGATION = re.compile(
     re.IGNORECASE,
 )
 
+_SCREENSHOT = re.compile(
+    r"^(?:take|grab|get|capture)\s+(?:a\s+)?screenshot(?:\s+of\s+(?:the\s+)?screen)?\s*[.!?]*$",
+    re.IGNORECASE,
+)
+_SCREEN_READ = re.compile(
+    r"^what(?:'s| is)\s+(?:on\s+)?(?:the\s+)?screen\s*[.!?]*$",
+    re.IGNORECASE,
+)
 _SAFE_TIME = re.compile(r"^[0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)?$", re.IGNORECASE)
 
 # Reject sentence-like text after open/start/run so ordinary chat is not
@@ -207,6 +215,11 @@ def interpret_device_action(text: str) -> dict | None:
 
     if _NOTIFICATIONS.fullmatch(value):
         return _request("read_notifications", {}, confirmation=True, sensitive=True)
+
+    if _SCREENSHOT.fullmatch(value) or _SCREEN_READ.fullmatch(value):
+        # The screenshot is taken by the companion, which asks for the capture
+        # permission the first time.
+        return _request("screenshot", {}, confirmation=False, sensitive=False)
 
     navigation = _NAVIGATION.fullmatch(value)
     if navigation:

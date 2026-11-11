@@ -59,6 +59,7 @@ ALLOWED_ACTIONS = {
     "media_control",
     "set_timer",
     "set_calendar",
+    "screenshot",
 }
 ACTION_ARGUMENTS = {
     "open_app": ({"name"}, set()),
@@ -79,6 +80,7 @@ ACTION_ARGUMENTS = {
     "media_control": ({"action"}, set()),
     "set_timer": ({"duration"}, {"message"}),
     "set_calendar": ({"title"}, {"time"}),
+    "screenshot": (set(), set()),
 }
 NAVIGATION_ACTIONS = {"back", "home", "recents"}
 # A call is authorised by the spoken command itself. A message is not, because
