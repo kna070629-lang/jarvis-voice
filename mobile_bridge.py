@@ -38,6 +38,7 @@ MAX_ACTIONS_TRACKED = 512
 CHAT_KEYS = {"action", "request_id", "text"}
 CHAT_OPTIONAL_KEYS = {"apps", "stream"}
 ACTION_RESULT_KEYS = {"action", "request_id", "action_id", "status", "message"}
+ORCHESTRATE_KEYS = {"action", "request_id", "text"}
 SENSITIVE_ACTIONS = {"call", "prepare_sms", "prepare_whatsapp", "read_notifications"}
 ALLOWED_ACTIONS = {
     "open_app",
@@ -138,12 +139,14 @@ class _BridgeServer(ThreadingHTTPServer):
                  status_provider: Callable[[], dict] | None = None,
                  action_planner: Callable[[str], dict | None] | None = None,
                  process_message_stream: Callable[..., object] | None = None,
-                 self_check: Callable[[], dict] | None = None):
+                 self_check: Callable[[], dict] | None = None,
+                 core: object | None = None):
         super().__init__((HOST, port), _BridgeHandler)
         self.token = token
         self.process_message = process_message
         self.process_message_stream = process_message_stream
         self.self_check = self_check
+        self.core = core
         self._message_accepts_device = _accepts_device(process_message)
         self.status_provider = status_provider
         self.action_planner = action_planner
@@ -371,6 +374,16 @@ class _BridgeHandler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError, OSError):
             return False
 
+    def _note_core(self, tier: str, duration_ms: int, provider: str, error: str) -> None:
+        """Tell the central core what happened, so the network view is honest."""
+        core = self.server.core
+        if core is None:
+            return
+        try:
+            core.note_activity(tier, duration_ms, provider, error)
+        except Exception:
+            pass
+
     def _stream_chat(self, request_id: str, text: str, device: dict | None) -> None:
         """Answer a chat request as a stream of speakable sentences.
 
@@ -452,6 +465,25 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                     payload["runtime"] = {"mode": "unknown"}
             self._send(200, payload)
             return
+        if self.path == "/v1/network":
+            auth = self.headers.get("Authorization", "")
+            expected = "Bearer " + self.server.token
+            if not hmac.compare_digest(auth.encode("utf-8"), expected.encode("utf-8")):
+                self._send(401, {"error": "unauthorized"})
+                return
+            core = self.server.core
+            if core is None:
+                self._send(404, {"error": "not_found"})
+                return
+            try:
+                self._send(200, {"network": core.topology()})
+            except Exception:
+                log.exception("The network view could not be built")
+                self._send(500, {"error": "network_unavailable"})
+            return
+        if self.path == "/v1/selfcheck":
+            self._send(404, {"error": "not_found"})
+            return
         if self.path == "/selfcheck":
             auth = self.headers.get("Authorization", "")
             expected = "Bearer " + self.server.token
@@ -505,6 +537,35 @@ class _BridgeHandler(BaseHTTPRequestHandler):
             self._send(400, {"error": "invalid_request_id"})
             return
 
+        if action == "orchestrate":
+            if set(request) != ORCHESTRATE_KEYS:
+                self._send(400, {"error": "invalid_schema"})
+                return
+            text = request.get("text")
+            if not isinstance(text, str) or not text.strip() or len(text) > MAX_TEXT_CHARS:
+                self._send(400, {"error": "invalid_text"})
+                return
+            core = self.server.core
+            if core is None:
+                self._send(404, {"error": "not_found"})
+                return
+            try:
+                outcome = core.execute(text)
+            except Exception:
+                log.exception("The orchestrator failed")
+                self._send(500, {"error": "orchestration_failed"})
+                return
+            self._send(200, {
+                "request_id": request_id,
+                "text": str(outcome.get("answer", "")),
+                "provider": outcome.get("provider", ""),
+                "trace": outcome.get("trace", []),
+                "action_request": outcome.get("action_request"),
+                "pending_approval": outcome.get("pending_approval"),
+                "duration_ms": outcome.get("duration_ms", 0),
+                "duplicate": False,
+            })
+            return
         if action == "chat":
             if not CHAT_KEYS.issubset(set(request)) or not set(request).issubset(CHAT_KEYS | CHAT_OPTIONAL_KEYS):
                 self._send(400, {"error": "invalid_schema"})
@@ -647,6 +708,7 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                             "action_request": planned,
                             "duplicate": False,
                         }
+                        self._note_core("device", 0, "device", "")
                     else:
                         payload = {
                             "request_id": request_id,
@@ -654,6 +716,12 @@ class _BridgeHandler(BaseHTTPRequestHandler):
                             "provider": _provider_name(self.server.status_provider),
                             "duplicate": False,
                         }
+                        self._note_core(
+                            "model",
+                            0,
+                            payload["provider"],
+                            "",
+                        )
             else:
                 if message.strip():
                     response = message.strip()[:MAX_ACTION_MESSAGE_CHARS]
@@ -706,11 +774,12 @@ def create_server(
     action_planner: Callable[[str], dict | None] | None = None,
     process_message_stream: Callable[..., object] | None = None,
     self_check: Callable[[], dict] | None = None,
+    core: object | None = None,
 ) -> _BridgeServer:
     """Create the bridge without starting its serving thread (also useful in tests)."""
     return _BridgeServer(
         token or load_or_create_token(), process_message, port, status_provider, action_planner,
-        process_message_stream, self_check,
+        process_message_stream, self_check, core,
     )
 
 
@@ -719,12 +788,14 @@ def start_mobile_bridge(
     status_provider: Callable[[], dict] | None = None,
     action_planner: Callable[[str], dict | None] | None = None,
     process_message_stream: Callable[..., object] | None = None,
+    core: object | None = None,
 ) -> tuple[_BridgeServer, threading.Thread]:
     server = create_server(
         process_message,
         status_provider=status_provider,
         action_planner=action_planner,
         process_message_stream=process_message_stream,
+        core=core,
     )
     thread = threading.Thread(target=server.serve_forever, name="jarvis-mobile-api", daemon=True)
     thread.start()

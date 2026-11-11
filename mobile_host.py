@@ -8,7 +8,12 @@ import os
 import threading
 import time
 
+from pathlib import Path
+
 from jarvis_actions import interpret_device_action
+from jarvis_config import load_settings
+from jarvis_search import WikipediaSearchProvider
+from jarvis_core import JarvisCore
 from jarvis_engine import JarvisEngine
 from jarvis_selfcheck import SelfCheck
 from mobile_bridge import create_server
@@ -18,6 +23,31 @@ log = logging.getLogger("jarvis.mobile")
 ENGINE: JarvisEngine | None = None
 _ENGINE_LOCK = threading.Lock()
 _SELFCHECK: SelfCheck | None = None
+_CORE: JarvisCore | None = None
+
+
+def core() -> JarvisCore:
+    """The central orchestrator. It is built once and shared."""
+    global _CORE
+    if _CORE is None:
+        with _ENGINE_LOCK:
+            if _CORE is None:
+                _CORE = JarvisCore(
+                    settings=load_settings(),
+                    providers=_core_providers(),
+                    search=WikipediaSearchProvider(),
+                    repository_root=str(Path(__file__).parent),
+                )
+    return _CORE
+
+
+def _core_providers() -> list:
+    """The providers the core may use. The same set the engine uses."""
+    from ai_provider import build_default_provider
+
+    settings = load_settings()
+    router = build_default_provider(settings)
+    return list(getattr(router, "providers", []) or [])
 
 
 def _engine() -> JarvisEngine:
@@ -141,6 +171,7 @@ def main() -> int:
         action_planner=interpret_device_action,
         process_message_stream=process_message_stream,
         self_check=self_check,
+        core=core(),
     )
     print("JARVIS Python backend listening on 127.0.0.1:8765; press Ctrl-C to stop.", flush=True)
     print("Provider status: " + str(provider_status()), flush=True)
